@@ -12,10 +12,11 @@ import { TransactionsTable } from "@/components/transactions/TransactionsTable";
 import { TransactionFormModal } from "@/components/transactions/TransactionFormModal";
 import { useCategories } from "@/hooks/useCategories";
 import { useCategoryRanking, useCategorySpendingReport, useTagRanking, useTagSpendingReport } from "@/hooks/useReports";
+import { useAppSettings } from "@/hooks/useSettings";
 import { useTags } from "@/hooks/useTags";
 import { useDeleteTransaction, useTransactions, useTransactionYears } from "@/hooks/useTransactions";
 import type { TransactionSort } from "@/api/transactions";
-import { computeRange, type CustomYearRange, type RangePreset } from "@/lib/dateRange";
+import { computeRange, RANGE_PRESET_OPTIONS, type CustomYearRange, type RangePreset } from "@/lib/dateRange";
 import { useTranslation } from "@/lib/i18n";
 import { buildHierarchicalCategories, translateCategoryName } from "@/lib/categoryLabels";
 import type { Transaction } from "@/types";
@@ -42,9 +43,7 @@ export function ReportsPage() {
   const { t, language } = useTranslation();
   const now = new Date();
   const RANGE_OPTIONS: Array<{ value: RangePreset; label: string }> = [
-    { value: "all", label: t("reports.rangeAll") },
-    { value: "this_year", label: t("reports.rangeThisYear") },
-    { value: "5y", label: t("reports.range5y") },
+    ...RANGE_PRESET_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) })),
     { value: "custom", label: t("reports.rangeCustom") },
   ];
   const MODE_OPTIONS: Array<{ value: ReportMode; label: string }> = [
@@ -57,7 +56,13 @@ export function ReportsPage() {
   const [mode, setMode] = useState<ReportMode>("category");
   const [categoryId, setCategoryId] = useState<number | null>(null);
   const [tagId, setTagId] = useState<number | null>(null);
-  const [range, setRange] = useState<RangePreset>("all");
+  // The opening period is server-configured (Settings → chart periods,
+  // seeded to "all"); userRange stays null until a pill is picked, so a
+  // settings response arriving late can still swap the default in without
+  // overriding an explicit choice.
+  const { data: appSettings } = useAppSettings();
+  const [userRange, setUserRange] = useState<RangePreset | null>(null);
+  const range = userRange ?? appSettings?.default_reports_range ?? "all";
   const [customRange, setCustomRange] = useState<CustomYearRange>({
     fromYear: now.getFullYear(),
     toYear: now.getFullYear(),
@@ -79,6 +84,14 @@ export function ReportsPage() {
   useEffect(() => {
     if (tagId !== null && tags && !tags.some((tag) => tag.id === tagId)) setTagId(null);
   }, [tags, tagId]);
+
+  // A settings response landing after the user has already paged would
+  // otherwise change the range underneath without realigning the list.
+  // Only fires while no pill was picked; React Query caches settings, so
+  // in practice this is the very first, uncached visit only.
+  useEffect(() => {
+    if (userRange === null) setPage(1);
+  }, [appSettings?.default_reports_range, userRange]);
 
   const { startDate, endDate } = computeRange(range, customRange);
   const isTagMode = mode === "tag";
@@ -209,7 +222,7 @@ export function ReportsPage() {
             options={RANGE_OPTIONS}
             value={range}
             onChange={(value) => {
-              setRange(value);
+              setUserRange(value);
               setPage(1);
             }}
           />

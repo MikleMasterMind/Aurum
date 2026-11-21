@@ -11,15 +11,22 @@ import { AssetFormModal } from "@/components/networth/AssetFormModal";
 import { AlertBanner } from "@/components/insights/AlertBanner";
 import { useNetWorthSummary } from "@/hooks/useNetWorth";
 import { useAssets, useDeleteAsset } from "@/hooks/useAssets";
+import { useAppSettings } from "@/hooks/useSettings";
 import { useTranslation } from "@/lib/i18n";
 import type { Asset, NetWorthRange } from "@/types";
 
 export function NetWorthPage() {
   const { t } = useTranslation();
-  // Defaults to 5 years: a short window can show a dip whenever spending
-  // briefly outpaces recorded income, which reads as decline even though
-  // the long-run trend is up — 5y is long enough to make that trend visible.
-  const [range, setRange] = useState<NetWorthRange>("5y");
+  // The opening period is server-configured (Settings → chart periods,
+  // seeded to "5y": a short window can show a dip whenever spending briefly
+  // outpaces recorded income, which reads as decline even though the
+  // long-run trend is up — 5y is long enough to make that trend visible).
+  // userRange stays null until the selector is touched, so the settings
+  // response arriving late can still swap the default in without ever
+  // overriding an explicit choice.
+  const { data: appSettings } = useAppSettings();
+  const [userRange, setUserRange] = useState<NetWorthRange | null>(null);
+  const range = userRange ?? appSettings?.default_net_worth_range ?? "5y";
   const { data: summary, isLoading: isSummaryLoading } = useNetWorthSummary(range);
   const { data: assets, isLoading: isAssetsLoading } = useAssets();
   const deleteAsset = useDeleteAsset();
@@ -47,7 +54,7 @@ export function NetWorthPage() {
     <div className="space-y-5">
       <AlertBanner />
 
-      <NetWorthChart summary={summary} isLoading={isSummaryLoading} range={range} onRangeChange={setRange} />
+      <NetWorthChart summary={summary} isLoading={isSummaryLoading} range={range} onRangeChange={setUserRange} />
 
       <AssetAllocationCard breakdown={summary?.breakdown ?? []} isLoading={isSummaryLoading} />
 

@@ -7,6 +7,20 @@ export interface CustomYearRange {
   toYear: number;
 }
 
+/** The three storable presets with their i18n keys, in display order —
+ * the single list CashFlowPage's and ReportsPage's pills and the
+ * Settings → chart periods card all build from, so the three can't drift
+ * apart. "custom" deliberately isn't here: it needs the years picked live
+ * on the page, so the pages append it themselves and the settings card
+ * (which can only store a period that shows data on open) never offers it.
+ * `as const` keeps the label keys literal so they typecheck against the
+ * i18n dictionary at the call sites. */
+export const RANGE_PRESET_OPTIONS = [
+  { value: "all", labelKey: "reports.rangeAll" },
+  { value: "this_year", labelKey: "reports.rangeThisYear" },
+  { value: "5y", labelKey: "reports.range5y" },
+] as const;
+
 function isoDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }

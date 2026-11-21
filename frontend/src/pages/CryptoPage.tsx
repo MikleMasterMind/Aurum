@@ -20,6 +20,7 @@ import {
   useUpdateCryptoHolding,
   useUpdateCryptoHoldingRisk,
 } from "@/hooks/useCrypto";
+import { useAppSettings } from "@/hooks/useSettings";
 import { getIntlLocale } from "@/lib/format";
 import { useTranslation } from "@/lib/i18n";
 import type { CryptoHolding, CryptoPortfolio, CryptoRange, CryptoTransaction, RiskLevel } from "@/types";
@@ -30,9 +31,15 @@ function formatSyncedAt(iso: string): string {
 
 export function CryptoPage() {
   const { t } = useTranslation();
-  // "all" by default — a 30-day window makes a portfolio that's actually
-  // grown steadily for years look demotivating whenever it's mid-dip.
-  const [range, setRange] = useState<CryptoRange>("all");
+  // The opening period is server-configured (Settings → chart periods,
+  // seeded to "all" — a 30-day window makes a portfolio that's actually
+  // grown steadily for years look demotivating whenever it's mid-dip).
+  // userRange stays null until a pill is picked, so a settings response
+  // arriving late can still swap the default in without overriding an
+  // explicit choice.
+  const { data: appSettings } = useAppSettings();
+  const [userRange, setUserRange] = useState<CryptoRange | null>(null);
+  const range = userRange ?? appSettings?.default_crypto_range ?? "all";
   // Single "hide balance" switch for the whole tab — owned here so every
   // money-displaying section (chart, stats, allocation, table, trade
   // history) masks together instead of the toggle only affecting whichever
@@ -123,7 +130,7 @@ export function CryptoPage() {
         history={history}
         isHistoryLoading={isHistoryLoading}
         range={range}
-        onRangeChange={setRange}
+        onRangeChange={setUserRange}
         holdings={holdings}
         isHoldingsLoading={isLoading}
         hidden={hidden}

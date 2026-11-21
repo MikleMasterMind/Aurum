@@ -1,5 +1,6 @@
 import { AlertThresholdsCard } from "@/components/settings/AlertThresholdsCard";
 import { BackupCard } from "@/components/settings/BackupCard";
+import { ChartDefaultsCard } from "@/components/settings/ChartDefaultsCard";
 import { CurrencyCard } from "@/components/settings/CurrencyCard";
 import { NavVisibilityCard } from "@/components/settings/NavVisibilityCard";
 import { PreferencesCard } from "@/components/settings/PreferencesCard";
@@ -28,6 +29,7 @@ export function SettingsPage({ hiddenNavRoutes, onToggleNavRoute }: SettingsPage
       <PreferencesCard />
       <NavVisibilityCard hiddenRoutes={hiddenNavRoutes} onToggle={onToggleNavRoute} />
       <CurrencyCard />
+      <ChartDefaultsCard />
       <AlertThresholdsCard />
       <BackupCard />
       {appSettings?.app_version && (

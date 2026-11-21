@@ -7,14 +7,19 @@ interface CryptoRangeSelectorProps {
   onChange: (value: CryptoRange) => void;
 }
 
-export function CryptoRangeSelector({ value, onChange }: CryptoRangeSelectorProps) {
-  const { t } = useTranslation();
-  const ranges: Array<{ value: CryptoRange; label: string }> = [
+/** The Crypto chart's pills, in display order — exported for the same
+ * reason as RangeSelector's list: the Settings → chart periods card
+ * reuses it, so the choices there can't drift from the chart's own. */
+export function cryptoRangeOptions(allLabel: string): Array<{ value: CryptoRange; label: string }> {
+  return [
     { value: "7d", label: "7D" },
     { value: "30d", label: "30D" },
     { value: "90d", label: "90D" },
-    { value: "all", label: t("common.allShort") },
+    { value: "all", label: allLabel },
   ];
+}
 
-  return <PillSelector options={ranges} value={value} onChange={onChange} />;
+export function CryptoRangeSelector({ value, onChange }: CryptoRangeSelectorProps) {
+  const { t } = useTranslation();
+  return <PillSelector options={cryptoRangeOptions(t("common.allShort"))} value={value} onChange={onChange} />;
 }

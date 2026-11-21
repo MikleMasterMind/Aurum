@@ -10,11 +10,67 @@ import { useTranslation, type TranslationKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { ChatPendingCall, ChatTurn } from "@/types";
 
-// The conversation key, not the conversation: only the opaque thread id
-// survives a reload (the server keeps the dialogue in its own memory;
-// the visible log is the page's and stays in it — a remount starts a
-// clean sheet while the model still remembers the context).
+// The conversation key, kept in localStorage. The server-side thread
+// lives in the backend's process memory: after a backend restart the id
+// survives but the model starts over — a late confirmation then
+// honestly answers confirm_expired instead of writing anything.
 const THREAD_KEY = "aurum:chat-thread";
+
+// The page's own view of the conversation — the log, the pending
+// confirmation cards, the per-card decisions. The router unmounts this
+// page on every tab switch and useState dies with it, while the
+// server-side thread lives on: without restoring the view, the user
+// comes back to an empty screen and a model that still remembers
+// everything. One entry for all three, written on change, read lazily
+// on mount.
+const VIEW_KEY = "aurum:chat-view";
+
+// The log is a display cache, not a diary: localStorage must not grow
+// unbounded with a long conversation, so writes trim to the newest
+// messages.
+const LOG_CAP = 100;
+
+interface PersistedChatView {
+  messages: UiMessage[];
+  pending: ChatPendingCall[] | null;
+  decided: Record<string, boolean>;
+}
+
+function loadPersistedView(): PersistedChatView {
+  // A missing or corrupted entry starts clean — never worth crashing
+  // the page over a display cache. Shapes are checked, not trusted,
+  // down to the entries themselves: the renderer assumes text is a
+  // string and args is an object, and a hand-tampered or foreign-
+  // version entry must degrade, not crash render.
+  try {
+    const raw = localStorage.getItem(VIEW_KEY);
+    if (!raw) return { messages: [], pending: null, decided: {} };
+    const parsed = JSON.parse(raw) as Partial<PersistedChatView>;
+    const messages = (Array.isArray(parsed.messages) ? parsed.messages : []).filter(
+      (message) =>
+        message &&
+        typeof message.text === "string" &&
+        (message.role === "user" || message.role === "assistant")
+    );
+    const pending = (Array.isArray(parsed.pending) ? parsed.pending : []).filter(
+      (call) =>
+        call &&
+        typeof call.id === "string" &&
+        typeof call.name === "string" &&
+        typeof call.args === "object" &&
+        call.args !== null
+    );
+    const decided =
+      parsed.decided && typeof parsed.decided === "object" && !Array.isArray(parsed.decided)
+        ? Object.fromEntries(
+            Object.entries(parsed.decided).filter(([, value]) => typeof value === "boolean")
+          )
+        : {};
+    return { messages, pending: pending.length > 0 ? pending : null, decided };
+  } catch {
+    return { messages: [], pending: null, decided: {} };
+  }
+}
 
 // Error codes from the backend (services/agent_chat.py) mapped to
 // localized text: codes, not messages, travel the API so the page can
@@ -68,12 +124,17 @@ export function AssistantPage() {
   const { data: status, isLoading, isError } = useChatStatus();
 
   const [threadId, setThreadId] = useState<string>(() => localStorage.getItem(THREAD_KEY) ?? "");
-  const [messages, setMessages] = useState<UiMessage[]>([]);
-  const [pending, setPending] = useState<ChatPendingCall[] | null>(null);
+  // One logical parse per mount feeds all three states: in production
+  // the lazy initializer runs once (dev's StrictMode double-invokes it
+  // — one extra harmless read) — and the view returns as it was left,
+  // modulo the LOG_CAP trim.
+  const [restored] = useState(loadPersistedView);
+  const [messages, setMessages] = useState<UiMessage[]>(restored.messages);
+  const [pending, setPending] = useState<ChatPendingCall[] | null>(restored.pending);
   // Per-card decisions until the whole batch is answered — the backend
   // takes one boolean list, so the cards lock as they are clicked and
   // the request fires only once every card has its answer.
-  const [decided, setDecided] = useState<Record<string, boolean>>({});
+  const [decided, setDecided] = useState<Record<string, boolean>>(restored.decided);
   const [input, setInput] = useState("");
   // One turn at a time, end to end: locks the send button, the cards
   // and the new-chat button while a turn is running.
@@ -84,6 +145,21 @@ export function AssistantPage() {
   useEffect(() => {
     if (threadId) localStorage.setItem(THREAD_KEY, threadId);
   }, [threadId]);
+
+  // The view outlives the route: written on every change so returning
+  // to the tab (or reloading) brings the log, the cards and the half-
+  // answered decisions back. handleReset clears all three states, which
+  // lands here as the empty snapshot — no special casing needed.
+  useEffect(() => {
+    localStorage.setItem(
+      VIEW_KEY,
+      JSON.stringify({
+        messages: messages.slice(-LOG_CAP),
+        pending,
+        decided,
+      })
+    );
+  }, [messages, pending, decided]);
 
   // Keep the newest turn in view — on mobile the log scrolls under the
   // keyboard otherwise, and the just-typed message must stay visible.

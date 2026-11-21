@@ -33,7 +33,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.types import interrupt
@@ -52,6 +52,26 @@ DECLINED_TOOL_RESULT = (
 
 # Key of the pending-calls list inside the interrupt payload.
 PENDING_KEY = "calls"
+
+
+def final_reply(result: dict[str, Any]) -> str:
+    """The user-facing text of a finished turn, ``""`` when there is none.
+
+    Shared by both frontends over this graph (the terminal REPL and the
+    backend's chat service): a tool-only turn cannot END the graph, but
+    an empty answer must surface as an empty string, not as an empty
+    markdown block. Some providers send block lists instead of plain
+    strings; keep the text parts, drop the rest.
+    """
+    last = result["messages"][-1]
+    if not isinstance(last, AIMessage) or not last.content:
+        return ""
+    content = last.content
+    if not isinstance(content, str):
+        content = " ".join(
+            str(block.get("text", "")) for block in content if isinstance(block, dict)
+        )
+    return content.strip()
 
 # Async callable returning likely duplicates for a transaction about
 # to be created; bound to the API client by the caller (see main).

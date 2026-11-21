@@ -104,6 +104,19 @@
   --color-series-other: var(--series-other);
 
   --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* Blinking-dots animation for ui/LoadingDots (the assistant's
+     "the agent is working" bubble). The token makes Tailwind generate
+     the animate-typing-dot utility; the keyframes live inside @theme
+     so they are emitted together with it, and only when it is used.
+     fill-mode "backwards" keeps dots 2 and 3 dim through their
+     animation-delay instead of flashing at full opacity on mount. */
+  --animate-typing-dot: typing-dot 1.2s ease-in-out infinite backwards;
+
+  @keyframes typing-dot {
+    0%, 60%, 100% { opacity: 0.25; }
+    30% { opacity: 1; }
+  }
 }
 
 body {

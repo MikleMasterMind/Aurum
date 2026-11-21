@@ -5,6 +5,7 @@ import { confirmChatCalls, resetChatThread, sendChatMessage } from "@/api/chat";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
+import { LoadingDots } from "@/components/ui/LoadingDots";
 import { useChatStatus } from "@/hooks/useChatStatus";
 import { useTranslation, type TranslationKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -163,9 +164,11 @@ export function AssistantPage() {
 
   // Keep the newest turn in view — on mobile the log scrolls under the
   // keyboard otherwise, and the just-typed message must stay visible.
+  // busy rides along so the in-flight dots land in view too: a confirm
+  // turn adds no message, the dots are the only thing that moves.
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, pending]);
+  }, [messages, pending, busy]);
 
   // Turn outcomes, one path for message and confirm alike: an error
   // code becomes a localized bubble, a pending list becomes cards (and
@@ -389,6 +392,24 @@ export function AssistantPage() {
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {/* The turn is in flight: three blinking dots in an
+            assistant-styled bubble, wordless on purpose — the input
+            placeholder already spells the waiting out in words. role
+            plus the existing assistant.thinking key let screen readers
+            hear the same; the dots themselves stay aria-hidden inside
+            LoadingDots. Rendered from busy alone, never pushed into
+            messages: the log persists to localStorage, and a transient
+            indicator must not. */}
+        {busy && (
+          <div
+            role="status"
+            aria-label={t("assistant.thinking")}
+            className="mr-auto flex w-fit items-center rounded-2xl border bg-surface-1 px-4 py-3"
+          >
+            <LoadingDots />
           </div>
         )}
         <div ref={bottomRef} />

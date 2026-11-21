@@ -419,3 +419,46 @@ async def test_router_split(mock_client_factory: Any, tool_name: str, expected: 
     result = await graph.ainvoke({"messages": [HumanMessage("действие")]}, CONFIG)
 
     assert ("__interrupt__" in result) is (expected == "confirm")
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "expected"),
+    [
+        ("get_budget_status", "tools"),
+        ("create_budget", "confirm"),
+        ("add_goal_contribution", "confirm"),
+        ("delete_goal", "confirm"),
+    ],
+)
+async def test_router_split_budgets_goals(
+    mock_client_factory: Any, tool_name: str, expected: str
+) -> None:
+    # Budgets and goals follow the same gate placement as the block-1
+    # tools: reads pass straight through, writes freeze at the
+    # interrupt with their args in the preview payload.
+    args_by_name: dict[str, dict[str, Any]] = {
+        "get_budget_status": {"year": 2026, "month": 11},
+        "create_budget": {"category_id": 4, "monthly_limit": 500.0},
+        "add_goal_contribution": {"goal_id": 1, "amount": 250.0, "date": "2026-11-21"},
+        "delete_goal": {"goal_id": 1},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Only the read-only case ever executes; give it a body its
+        # compaction can digest.
+        return httpx.Response(200, json={"year": 2026, "month": 11, "items": []})
+
+    client, _ = mock_client_factory(handler)
+    model = ScriptedModel()
+    model.queue(tool_call("c1", tool_name, args_by_name[tool_name]))
+    model.queue(AIMessage(content="…"))
+    graph = make_graph(client, model)
+
+    result = await graph.ainvoke({"messages": [HumanMessage("действие")]}, CONFIG)
+
+    assert ("__interrupt__" in result) is (expected == "confirm")
+    if "__interrupt__" in result:
+        # The preview carries exactly what the model wanted to send.
+        pending = result["__interrupt__"][0].value[PENDING_KEY]
+        assert pending[0]["name"] == tool_name
+        assert pending[0]["args"] == args_by_name[tool_name]

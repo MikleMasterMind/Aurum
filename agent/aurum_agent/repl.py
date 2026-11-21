@@ -27,8 +27,8 @@ from .graph import PENDING_KEY
 ReadLine = Callable[[], Awaitable[str]]
 
 # Human-readable action labels for the confirmation previews. The
-# delete_account label repeats the cascade warning on purpose: it is
-# the one operation that destroys other data along with its target.
+# delete_account and delete_goal labels repeat the cascade warning on
+# purpose: they destroy other data along with their targets.
 ACTION_LABELS = {
     "create_transaction": "Создать транзакцию",
     "update_transaction": "Изменить транзакцию",
@@ -40,6 +40,13 @@ ACTION_LABELS = {
     "update_category": "Изменить категорию",
     "delete_category": "Удалить категорию",
     "create_tag": "Создать тег",
+    "create_budget": "Создать бюджет",
+    "update_budget": "Изменить бюджет",
+    "delete_budget": "Удалить бюджет",
+    "create_goal": "Создать цель",
+    "update_goal": "Изменить цель",
+    "delete_goal": "Удалить цель — вместе с журналом взносов",
+    "add_goal_contribution": "Записать взнос в цель (отрицательная сумма — списание)",
 }
 
 

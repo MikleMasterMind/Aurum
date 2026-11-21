@@ -1,4 +1,4 @@
-"""LangChain tools over the Aurum REST API: accounts, categories, tags.
+"""LangChain tools over the Aurum REST API: accounts, categories, tags, transactions, budgets, goals.
 
 Each tool is a thin, typed wrapper around one endpoint: it compacts the
 response into model-friendly JSON, or turns an ``AurumApiError`` into a
@@ -30,6 +30,8 @@ PATH_ACCOUNTS = "/accounts"
 PATH_CATEGORIES = "/categories"
 PATH_TAGS = "/tags"
 PATH_TRANSACTIONS = "/transactions"
+PATH_BUDGETS = "/budgets"
+PATH_GOALS = "/goals"
 
 
 @dataclass(frozen=True)
@@ -153,6 +155,30 @@ def _compact_transaction(transaction: dict[str, Any]) -> dict[str, Any]:
             }
             for split in splits
         ],
+    }
+
+
+def _compact_budget(budget: dict[str, Any]) -> dict[str, Any]:
+    """Fields the model needs to discuss a budget; color/icon are UI-only."""
+    return {
+        "id": budget.get("id"),
+        "category_id": budget.get("category_id"),
+        "category_name": budget.get("category_name"),
+        "monthly_limit": budget.get("monthly_limit"),
+    }
+
+
+def _compact_budget_status_item(item: dict[str, Any]) -> dict[str, Any]:
+    """One budget-vs-actual row without the UI-only color/icon fields."""
+    return {
+        "budget_id": item.get("budget_id"),
+        "category_id": item.get("category_id"),
+        "category_name": item.get("category_name"),
+        "monthly_limit": item.get("monthly_limit"),
+        "spent": item.get("spent"),
+        "remaining": item.get("remaining"),
+        "percent": item.get("percent"),
+        "is_over_budget": item.get("is_over_budget"),
     }
 
 
@@ -566,5 +592,151 @@ def build_tools(client: AurumClient) -> ToolBundle:
     )
     async def delete_transaction(transaction_id: int) -> str:
         return await call("DELETE", f"{PATH_TRANSACTIONS}/{transaction_id}")
+
+    # --- Budgets ---
+
+    @registry.add(
+        "List the user's budgets — one monthly spending limit per "
+        "expense category (id, category_id, category_name, "
+        "monthly_limit)."
+    )
+    async def list_budgets() -> str:
+        return await call(
+            "GET",
+            PATH_BUDGETS,
+            compact=lambda items: [_compact_budget(item) for item in items],
+        )
+
+    @registry.add(
+        "Budgets vs. actual spend for one month — THE call for 'how "
+        "much is left in the X budget'. year (2000-2100) and month "
+        "(1-12) default to the current month. Each item: budget_id, "
+        "category_id, category_name, monthly_limit, spent (includes "
+        "the category's subcategories), remaining, percent (may "
+        "exceed 100), is_over_budget. budget_id and category_id are "
+        "the handles for a later update_budget or delete_budget."
+    )
+    async def get_budget_status(year: int | None = None, month: int | None = None) -> str:
+        params = _omit_none(year=year, month=month)
+        return await call(
+            "GET",
+            f"{PATH_BUDGETS}/status",
+            params=params or None,
+            compact=lambda payload: {
+                "year": payload.get("year"),
+                "month": payload.get("month"),
+                "items": [_compact_budget_status_item(item) for item in payload.get("items", [])],
+            },
+        )
+
+    @registry.add(
+        "Create a monthly spending limit for ONE expense category. "
+        "Income categories cannot be budgeted, and each category has "
+        "at most one budget — the API returns 400 when either rule is "
+        "broken. Resolve the category id with list_categories first. "
+        "monthly_limit must be positive.",
+        is_write=True,
+    )
+    async def create_budget(category_id: int, monthly_limit: float) -> str:
+        return await call(
+            "POST",
+            PATH_BUDGETS,
+            body={"category_id": category_id, "monthly_limit": monthly_limit},
+            compact=_compact_budget,
+        )
+
+    @registry.add(
+        "Change a budget's monthly_limit (positive). The category "
+        "binding is fixed — to move a limit to another category, "
+        "delete and recreate the budget.",
+        is_write=True,
+    )
+    async def update_budget(budget_id: int, monthly_limit: float) -> str:
+        return await call(
+            "PATCH",
+            f"{PATH_BUDGETS}/{budget_id}",
+            body={"monthly_limit": monthly_limit},
+            compact=_compact_budget,
+        )
+
+    @registry.add(
+        "Delete a budget — only the limit goes; the category and its "
+        "transactions stay untouched.",
+        is_write=True,
+    )
+    async def delete_budget(budget_id: int) -> str:
+        return await call("DELETE", f"{PATH_BUDGETS}/{budget_id}")
+
+    # --- Goals ---
+
+    @registry.add(
+        "List savings goals with computed progress: id, name, "
+        "target_amount, target_date, current_amount, remaining, "
+        "percent, is_reached."
+    )
+    async def list_goals() -> str:
+        return await call("GET", PATH_GOALS)
+
+    @registry.add(
+        "Create a savings goal. name: 1-150 chars. target_amount: "
+        "positive. target_date: 'YYYY-MM-DD', or omit for an open-ended "
+        "goal. Progress starts at zero — money is attached later by "
+        "logging contributions.",
+        is_write=True,
+    )
+    async def create_goal(
+        name: str,
+        target_amount: float,
+        target_date: str | None = None,
+    ) -> str:
+        body = _omit_none(name=name, target_amount=target_amount, target_date=target_date)
+        return await call("POST", PATH_GOALS, body=body)
+
+    @registry.add(
+        "Update a goal partially — omitted fields stay as-is. "
+        "clear_target_date=true removes the deadline (sends "
+        "target_date=null) and wins if target_date is also given.",
+        is_write=True,
+    )
+    async def update_goal(
+        goal_id: int,
+        name: str | None = None,
+        target_amount: float | None = None,
+        target_date: str | None = None,
+        clear_target_date: bool = False,
+    ) -> str:
+        body = _omit_none(name=name, target_amount=target_amount, target_date=target_date)
+        # Same explicit-null pattern as update_category's clear_parent:
+        # "not provided" keeps the date, an explicit null clears it.
+        if clear_target_date:
+            body["target_date"] = None
+        return await call("PATCH", f"{PATH_GOALS}/{goal_id}", body=body)
+
+    @registry.add(
+        "Log money moved into (positive amount) or out of (negative "
+        "amount) a goal. The ONLY way to change a goal's progress: "
+        "current_amount is always the sum of every logged "
+        "contribution, there is no 'set balance' call. Zero is "
+        "rejected. date: 'YYYY-MM-DD'. note: optional, up to 200 "
+        "chars.",
+        is_write=True,
+    )
+    async def add_goal_contribution(
+        goal_id: int,
+        amount: float,
+        date: str,
+        note: str | None = None,
+    ) -> str:
+        body = _omit_none(amount=amount, date=date, note=note)
+        return await call("POST", f"{PATH_GOALS}/{goal_id}/contributions", body=body)
+
+    @registry.add(
+        "PERMANENTLY delete a goal AND its whole contribution log — "
+        "the money history goes with it, and there is no softer "
+        "archive-like option for goals.",
+        is_write=True,
+    )
+    async def delete_goal(goal_id: int) -> str:
+        return await call("DELETE", f"{PATH_GOALS}/{goal_id}")
 
     return registry.bundle()

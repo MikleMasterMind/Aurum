@@ -20,3 +20,14 @@ def test_prompt_pins_confirmation_etiquette() -> None:
     assert "declines" in prompt
     assert "duplicate" in prompt
     assert "never guess" in prompt
+
+
+def test_prompt_pins_budget_and_goal_rules() -> None:
+    prompt = build_system_prompt(today="2026-11-21", currency="USD")
+
+    # Budget questions go to the status endpoint, not to manual sums;
+    # goal progress is contribution-log arithmetic, never a settable
+    # balance — both rules mirror what the API actually allows.
+    assert "get_budget_status" in prompt
+    assert "contributions" in prompt
+    assert "monthly limit per expense category" in prompt

@@ -22,6 +22,13 @@ EXPECTED_WRITE_NAMES = {
     "create_transaction",
     "update_transaction",
     "delete_transaction",
+    "create_budget",
+    "update_budget",
+    "delete_budget",
+    "create_goal",
+    "update_goal",
+    "delete_goal",
+    "add_goal_contribution",
 }
 
 
@@ -67,6 +74,57 @@ def transaction_payload() -> dict[str, Any]:
         "tags": [{"id": 3, "name": "weekend"}],
         "splits": [],
     }
+
+
+def budget_payload() -> list[dict[str, Any]]:
+    # Extra fields on purpose: compaction must drop them.
+    return [
+        {
+            "id": 1,
+            "category_id": 4,
+            "category_name": "Groceries",
+            "category_color": "#22c55e",
+            "category_icon": "shopping-cart",
+            "monthly_limit": "500.00",
+        }
+    ]
+
+
+def budget_status_payload() -> dict[str, Any]:
+    return {
+        "year": 2026,
+        "month": 11,
+        "items": [
+            {
+                "budget_id": 1,
+                "category_id": 4,
+                "category_name": "Groceries",
+                "category_color": "#22c55e",
+                "category_icon": "shopping-cart",
+                "monthly_limit": "500.00",
+                "spent": "612.30",
+                "remaining": "-112.30",
+                "percent": 122.46,
+                "is_over_budget": True,
+            }
+        ],
+    }
+
+
+def goal_payload() -> list[dict[str, Any]]:
+    # Already compact server-side (GoalRead) — the tool passes it through.
+    return [
+        {
+            "id": 1,
+            "name": "Emergency fund",
+            "target_amount": "10000.00",
+            "target_date": "2027-01-01",
+            "current_amount": "3250.00",
+            "remaining": "6750.00",
+            "percent": 32.5,
+            "is_reached": False,
+        }
+    ]
 
 
 async def test_write_names_registry_is_exact(
@@ -522,6 +580,225 @@ async def test_delete_transaction_path_and_204(mock_client_factory: Any) -> None
     assert "204" in result
 
 
+async def test_list_budgets_compacts_to_model_fields(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(lambda request: httpx.Response(200, json=budget_payload()))
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["list_budgets"].ainvoke({})
+
+    # color/icon are UI-only and must not reach the model's context.
+    assert json.loads(result) == [
+        {"id": 1, "category_id": 4, "category_name": "Groceries", "monthly_limit": "500.00"}
+    ]
+    assert str(calls[0].url) == "http://test.local/api/budgets"
+
+
+async def test_budget_status_passes_period_and_compacts_items(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(
+        lambda request: httpx.Response(200, json=budget_status_payload())
+    )
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["get_budget_status"].ainvoke({"year": 2026, "month": 11})
+
+    assert calls[0].url.params["year"] == "2026"
+    assert calls[0].url.params["month"] == "11"
+    parsed = json.loads(result)
+    assert parsed["year"] == 2026
+    # percent > 100 with is_over_budget=true stays honest — the model
+    # reports overspending as it is.
+    assert parsed["items"] == [
+        {
+            "budget_id": 1,
+            "category_id": 4,
+            "category_name": "Groceries",
+            "monthly_limit": "500.00",
+            "spent": "612.30",
+            "remaining": "-112.30",
+            "percent": 122.46,
+            "is_over_budget": True,
+        }
+    ]
+
+
+async def test_budget_status_omits_unset_period(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(
+        lambda request: httpx.Response(200, json=budget_status_payload())
+    )
+    bundle = build_tools(client)
+
+    await bundle_by_name(bundle)["get_budget_status"].ainvoke({})
+
+    # No period travel: the backend defaults to the current month.
+    assert dict(calls[0].url.params) == {}
+
+
+async def test_create_budget_body_and_compacted_answer(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(
+        lambda request: httpx.Response(201, json=budget_payload()[0])
+    )
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["create_budget"].ainvoke(
+        {"category_id": 4, "monthly_limit": 500.0}
+    )
+
+    assert calls[0].method == "POST"
+    assert str(calls[0].url) == "http://test.local/api/budgets"
+    assert body_of(calls[0]) == {"category_id": 4, "monthly_limit": 500.0}
+    assert json.loads(result)["category_name"] == "Groceries"
+
+
+async def test_update_budget_sends_limit_only(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(
+        lambda request: httpx.Response(200, json=budget_payload()[0])
+    )
+    bundle = build_tools(client)
+
+    await bundle_by_name(bundle)["update_budget"].ainvoke({"budget_id": 1, "monthly_limit": 600.0})
+
+    assert calls[0].method == "PATCH"
+    assert str(calls[0].url) == "http://test.local/api/budgets/1"
+    assert body_of(calls[0]) == {"monthly_limit": 600.0}
+
+
+async def test_delete_budget_path_and_204(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(lambda request: httpx.Response(204))
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["delete_budget"].ainvoke({"budget_id": 1})
+
+    assert calls[0].method == "DELETE"
+    assert str(calls[0].url) == "http://test.local/api/budgets/1"
+    assert "204" in result
+
+
+async def test_list_goals_passes_compact_rows_through(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(lambda request: httpx.Response(200, json=goal_payload()))
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["list_goals"].ainvoke({})
+
+    # GoalRead is already model-sized; no compaction layer on purpose.
+    assert json.loads(result) == goal_payload()
+    assert str(calls[0].url) == "http://test.local/api/goals"
+
+
+async def test_create_goal_omits_unset_target_date(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(
+        lambda request: httpx.Response(201, json=goal_payload()[0])
+    )
+    bundle = build_tools(client)
+
+    await bundle_by_name(bundle)["create_goal"].ainvoke(
+        {"name": "Emergency fund", "target_amount": 10000.0}
+    )
+
+    assert calls[0].method == "POST"
+    # Omitted target_date stays omitted — an open-ended goal.
+    assert body_of(calls[0]) == {"name": "Emergency fund", "target_amount": 10000.0}
+
+
+async def test_create_goal_with_target_date_sends_it(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(
+        lambda request: httpx.Response(201, json=goal_payload()[0])
+    )
+    bundle = build_tools(client)
+
+    await bundle_by_name(bundle)["create_goal"].ainvoke(
+        {"name": "Emergency fund", "target_amount": 10000.0, "target_date": "2027-01-01"}
+    )
+
+    assert body_of(calls[0]) == {
+        "name": "Emergency fund",
+        "target_amount": 10000.0,
+        "target_date": "2027-01-01",
+    }
+
+
+async def test_update_goal_clear_target_date_sends_explicit_null(
+    mock_client_factory: Any,
+) -> None:
+    client, calls = mock_client_factory(
+        lambda request: httpx.Response(200, json=goal_payload()[0])
+    )
+    bundle = build_tools(client)
+
+    await bundle_by_name(bundle)["update_goal"].ainvoke({"goal_id": 1, "clear_target_date": True})
+
+    # Omitted target_date keeps the deadline; explicit null clears it —
+    # two different requests per the backend's exclude_unset rule.
+    assert body_of(calls[0]) == {"target_date": None}
+
+
+async def test_update_goal_clear_wins_over_value(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(
+        lambda request: httpx.Response(200, json=goal_payload()[0])
+    )
+    bundle = build_tools(client)
+
+    await bundle_by_name(bundle)["update_goal"].ainvoke(
+        {"goal_id": 1, "target_date": "2027-06-01", "clear_target_date": True}
+    )
+
+    assert body_of(calls[0]) == {"target_date": None}
+
+
+async def test_update_goal_without_fields_makes_no_call(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(lambda request: httpx.Response(200, json={}))
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["update_goal"].ainvoke({"goal_id": 1})
+
+    assert calls == []
+    assert "Nothing to update" in result
+
+
+async def test_add_goal_contribution_body_omits_unset_note(
+    mock_client_factory: Any,
+) -> None:
+    client, calls = mock_client_factory(
+        lambda request: httpx.Response(201, json=goal_payload()[0])
+    )
+    bundle = build_tools(client)
+
+    await bundle_by_name(bundle)["add_goal_contribution"].ainvoke(
+        {"goal_id": 1, "amount": 250.0, "date": "2026-11-21"}
+    )
+
+    assert calls[0].method == "POST"
+    assert str(calls[0].url) == "http://test.local/api/goals/1/contributions"
+    assert body_of(calls[0]) == {"amount": 250.0, "date": "2026-11-21"}
+
+
+async def test_add_goal_contribution_negative_amount_travels_as_is(
+    mock_client_factory: Any,
+) -> None:
+    # A withdrawal is a negative contribution — the tool must not
+    # touch the sign, only the backend knows what it means.
+    client, calls = mock_client_factory(
+        lambda request: httpx.Response(201, json=goal_payload()[0])
+    )
+    bundle = build_tools(client)
+
+    await bundle_by_name(bundle)["add_goal_contribution"].ainvoke(
+        {"goal_id": 1, "amount": -250.0, "date": "2026-11-21", "note": "Pullback"}
+    )
+
+    assert body_of(calls[0]) == {"amount": -250.0, "date": "2026-11-21", "note": "Pullback"}
+
+
+async def test_delete_goal_path_and_204(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(lambda request: httpx.Response(204))
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["delete_goal"].ainvoke({"goal_id": 1})
+
+    assert calls[0].method == "DELETE"
+    assert str(calls[0].url) == "http://test.local/api/goals/1"
+    assert "204" in result
+
+
 @pytest.mark.parametrize(
     ("tool_name", "is_write"),
     [
@@ -540,6 +817,16 @@ async def test_delete_transaction_path_and_204(mock_client_factory: Any) -> None
         ("create_transaction", True),
         ("update_transaction", True),
         ("delete_transaction", True),
+        ("list_budgets", False),
+        ("get_budget_status", False),
+        ("create_budget", True),
+        ("update_budget", True),
+        ("delete_budget", True),
+        ("list_goals", False),
+        ("create_goal", True),
+        ("update_goal", True),
+        ("delete_goal", True),
+        ("add_goal_contribution", True),
     ],
 )
 async def test_every_tool_is_classified(

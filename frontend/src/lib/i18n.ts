@@ -373,6 +373,9 @@ const ru = {
   "settings.riskyAllocationThresholdLabel": "Допустимая доля рискового капитала, %",
   "settings.idleCashThresholdAmountLabel": "Простаивающий кэш — сумма от",
   "settings.idleCashThresholdDaysLabel": "Простаивающий кэш — без движения, дней",
+  "settings.navVisibilityTitle": "Разделы в меню",
+  "settings.navVisibilityHint":
+    "Действует только для этого браузера. Скрытые разделы остаются доступны по прямой ссылке.",
 
   "backup.title": "Резервное копирование",
   "backup.description":
@@ -906,6 +909,9 @@ const en: Record<keyof typeof ru, string> = {
   "settings.riskyAllocationThresholdLabel": "Max % of capital allowed at risk",
   "settings.idleCashThresholdAmountLabel": "Idle cash — balance at or above",
   "settings.idleCashThresholdDaysLabel": "Idle cash — no activity for, days",
+  "settings.navVisibilityTitle": "Menu sections",
+  "settings.navVisibilityHint":
+    "Applies to this browser only. Hidden sections stay reachable by their direct URL.",
 
   "backup.title": "Backup & Restore",
   "backup.description":

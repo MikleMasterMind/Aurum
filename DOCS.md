@@ -801,7 +801,7 @@ Single row, created automatically on first run — there's nothing to create, on
   "default_cash_flow_range": "this_year",
   "default_reports_range": "all",
   "default_crypto_range": "all",
-  "app_version": "1.2.0"
+  "app_version": "1.2.1"
 }
 ```
 

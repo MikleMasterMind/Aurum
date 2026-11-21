@@ -1,7 +1,8 @@
 """The terminal REPL: renders confirmation previews, feeds decisions back.
 
 Everything the user actually sees lives here — previews of pending
-writes (with duplicate warnings), y/n prompts, the model's answers.
+writes (resolved id names and duplicate warnings included), y/n
+prompts, the model's answers.
 `repl_loop` is deliberately testable: the console and the line reader
 are injected, so a scripted session drives the same interrupt/resume
 path a human would.
@@ -42,18 +43,44 @@ ACTION_LABELS = {
     "create_tag": "Создать тег",
 }
 
+# Russian labels for the id arguments on the preview line. The names
+# arrive in the payload — resolved once per batch by the graph's
+# prepare node (see naming.py) — so the REPL itself makes no extra API
+# calls; an id that did not resolve keeps its raw ``key=value`` form
+# instead of silently disappearing behind a label.
+ARG_LABELS = {
+    "account_id": "счёт",
+    "transfer_account_id": "счёт-получатель",
+    "category_id": "категория",
+    "parent_id": "родительская категория",
+    "tag_ids": "теги",
+}
 
-def describe_call(name: str, args: dict[str, Any]) -> str:
-    """One honest line per pending write: the label plus the raw fields.
 
-    Deliberately no name resolution — the preview shows exactly what
-    will be sent, and resolving ids to names would cost extra API
-    calls before every confirmation.
+def describe_call(
+    name: str,
+    args: dict[str, Any],
+    names: dict[str, str] | None = None,
+) -> str:
+    """One honest line per pending write: the label plus the fields.
+
+    The id arguments show their resolved names (``счёт=«Карта»``) when
+    the payload carries them — the resolver already ran in prepare, so
+    this costs nothing here. Anything unresolved stays raw: ``args`` is
+    exactly what will be sent, and a name the resolver could not fetch
+    must not hide the id behind it.
     """
     label = ACTION_LABELS.get(name, name)
     if not args:
         return label
-    details = ", ".join(f"{key}={value!r}" for key, value in args.items())
+    resolved = names or {}
+    parts: list[str] = []
+    for key, value in args.items():
+        if key in resolved:
+            parts.append(f"{ARG_LABELS.get(key, key)}=«{resolved[key]}»")
+        else:
+            parts.append(f"{key}={value!r}")
+    details = ", ".join(parts)
     return f"{label}: {details}"
 
 
@@ -68,8 +95,8 @@ def parse_yes(answer: str) -> bool | None:
 
 
 def print_pending(console: Console, entry: dict[str, Any]) -> None:
-    """Render one pending write, duplicate warning included."""
-    lines = [describe_call(entry["name"], entry.get("args") or {})]
+    """Render one pending write, resolved names and duplicate warning included."""
+    lines = [describe_call(entry["name"], entry.get("args") or {}, entry.get("names"))]
     duplicates = entry.get("duplicates") or []
     if duplicates:
         lines.append("[yellow]⚠️  Похоже, похожая транзакция уже есть:[/yellow]")

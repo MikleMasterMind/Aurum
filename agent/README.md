@@ -26,8 +26,11 @@ $ aurum-agent
   tags (list/create), transactions (get/search/create/update/delete).
 - **LangGraph** drives the dialogue. Every tool that mutates data is routed
   through a terminal confirmation (`interrupt`/`resume`) — the model cannot
-  execute a write without an explicit `y` from you. Declined operations come
-  back to the model as a refusal, with an instruction not to retry on its own.
+  execute a write without an explicit `y` from you. The preview names what
+  it is about to touch: account/category/tag ids resolve to their names
+  (fetched once per batch), and an id that failed to resolve shows raw.
+  Declined operations come back to the model as a refusal, with an
+  instruction not to retry on its own.
 - **Idempotency.** The API has no idempotency keys, so the agent guards
   itself: writes are never auto-retried (a timed-out POST is not re-sent),
   and before creating a transaction the agent checks for an existing one

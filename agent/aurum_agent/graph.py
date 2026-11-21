@@ -10,8 +10,9 @@ until the model answers without tool calls::
 Preparation and confirmation are separate nodes on purpose: a resumed
 interrupt re-executes its node from the top, so any work placed above
 ``interrupt()`` would run twice. ``prepare`` builds the preview payload
-(enriched with likely duplicates for create_transaction) and COMPLETES
-— its result is checkpointed once. ``confirm`` does nothing before
+(enriched with resolved id-to-name labels and likely duplicates for
+create_transaction) and COMPLETES — its result is checkpointed once.
+``confirm`` does nothing before
 ``interrupt()`` except read that result, so a resume costs one state
 read and zero API calls. The REPL renders the payload, the user
 answers, and the decision comes back as a per-call list of booleans.
@@ -77,14 +78,20 @@ def final_reply(result: dict[str, Any]) -> str:
 # to be created; bound to the API client by the caller (see main).
 DuplicateChecker = Callable[..., Awaitable[list[dict[str, Any]]]]
 
+# Async callable resolving the id arguments of a pending batch into
+# display names (see naming.py); bound to the API client by the caller,
+# the same injection pattern as DuplicateChecker.
+NameResolver = Callable[..., Awaitable[dict[str, dict[str, str]]]]
+
 
 class AgentState(MessagesState):
     """Dialogue history plus the confirm nodes' working channels.
 
     ``pending_calls`` is the preview payload built by prepare (write
-    calls only, duplicates included); ``approvals`` maps tool_call ids
-    to the user's booleans after confirm. Both are cleared by the
-    tools node — reads never appear here, they don't need a gate.
+    calls only, resolved names and duplicates included); ``approvals``
+    maps tool_call ids to the user's booleans after confirm. Both are
+    cleared by the tools node — reads never appear here, they don't
+    need a gate.
     """
 
     pending_calls: list[dict[str, Any]]
@@ -97,14 +104,18 @@ def build_agent_graph(
     *,
     system_prompt: str,
     duplicate_checker: DuplicateChecker,
+    name_resolver: NameResolver,
     checkpointer: BaseCheckpointSaver,
 ) -> Any:
     """Assemble the compiled graph from the injected dependencies.
 
     ``duplicate_checker`` is ``find_duplicates`` bound to the API client
     (or a stub in tests) — the graph itself stays network-light. The
-    checkpointer is required, not optional: ``interrupt()`` cannot
-    freeze and resume a confirmation without one.
+    same for ``name_resolver``: ``find_names`` bound to the client,
+    turning the id arguments of the pending batch into display names
+    for the preview (see naming.py). The checkpointer is required, not
+    optional: ``interrupt()`` cannot freeze and resume a confirmation
+    without one.
     """
     bound_model = model.bind_tools(bundle.tools)
     tools_by_name = {tool.name: tool for tool in bundle.tools}
@@ -122,18 +133,24 @@ def build_agent_graph(
         """Build the preview payload; runs exactly once per batch.
 
         Completing this node checkpoints the pending list, so the
-        duplicate check (an API call) is never repeated on resume.
+        duplicate check and the id-to-name resolution (API calls) are
+        never repeated on resume.
         """
         last = state["messages"][-1]
+        write_calls = [call for call in last.tool_calls if call["name"] in write_names]
+        resolved_names = await name_resolver(write_calls)
         pending: list[dict[str, Any]] = []
-        for call in last.tool_calls:
-            if call["name"] not in write_names:
-                continue
+        for call in write_calls:
             entry: dict[str, Any] = {
                 "id": call["id"],
                 "name": call["name"],
                 "args": call["args"],
             }
+            # Display names for the id arguments, resolved once above;
+            # keys without a name render as raw ids (see naming.py).
+            names = resolved_names.get(call["id"])
+            if names:
+                entry["names"] = names
             if call["name"] == "create_transaction":
                 # Advisory only: a failing duplicate check degrades to
                 # [] inside find_duplicates, so this can only enrich

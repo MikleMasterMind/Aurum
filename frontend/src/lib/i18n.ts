@@ -568,6 +568,11 @@ const ru = {
   "assistant.action.updateCategory": "Изменить категорию",
   "assistant.action.deleteCategory": "Удалить категорию",
   "assistant.action.createTag": "Создать тег",
+  "assistant.arg.account": "Счёт",
+  "assistant.arg.transferAccount": "Счёт-получатель",
+  "assistant.arg.category": "Категория",
+  "assistant.arg.parentCategory": "Родительская категория",
+  "assistant.arg.tags": "Теги",
 };
 
 const en: Record<keyof typeof ru, string> = {
@@ -1130,6 +1135,11 @@ const en: Record<keyof typeof ru, string> = {
   "assistant.action.updateCategory": "Update category",
   "assistant.action.deleteCategory": "Delete category",
   "assistant.action.createTag": "Create tag",
+  "assistant.arg.account": "Account",
+  "assistant.arg.transferAccount": "To account",
+  "assistant.arg.category": "Category",
+  "assistant.arg.parentCategory": "Parent category",
+  "assistant.arg.tags": "Tags",
 };
 
 const translations: Record<Language, Record<keyof typeof ru, string>> = { ru, en };

@@ -631,9 +631,14 @@ export interface ChatStatus {
 export interface ChatPendingCall {
   id: string;
   name: string;
-  /** Raw fields exactly as they would be sent — no id-to-name resolution,
-   * the same honesty rule as the terminal's preview. */
+  /** Raw fields exactly as they would be sent — the source of truth the
+   * write runs on; `names`, when present, replaces the display of the id
+   * arguments with resolved labels, missing keys fall back to raw ids. */
   args: Record<string, unknown>;
+  /** Display names for the id arguments (arg key -> label), resolved at
+   * preview time by the agent (see agent/aurum_agent/naming.py); absent
+   * when nothing resolved — same enrichment the terminal preview gets. */
+  names?: Record<string, string> | null;
   duplicates: ChatDuplicateInfo[] | null;
 }
 

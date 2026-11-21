@@ -797,6 +797,10 @@ Single row, created automatically on first run — there's nothing to create, on
   "risky_allocation_threshold_percent": 20,
   "idle_cash_threshold_amount": "1000.00",
   "idle_cash_threshold_days": 60,
+  "default_net_worth_range": "5y",
+  "default_cash_flow_range": "this_year",
+  "default_reports_range": "all",
+  "default_crypto_range": "all",
   "app_version": "1.2.1"
 }
 ```
@@ -810,6 +814,11 @@ Single row, created automatically on first run — there's nothing to create, on
   before `risky_allocation_exceeded` fires (`1`–`100`).
 - `idle_cash_threshold_amount` / `idle_cash_threshold_days`: balance + days of no activity a
   depository account needs to hit before `idle_cash` fires.
+- `default_net_worth_range` / `default_cash_flow_range` / `default_reports_range` /
+  `default_crypto_range`: which period the corresponding page's chart opens with. Values are exactly
+  the page's own selector pills (`30d/90d/1y/5y/all` for Net Worth, `all/this_year/5y` for Cash Flow
+  and Reports, `7d/30d/90d/all` for Crypto); anything else is a `422`. `custom` isn't accepted — it
+  needs the years picked live on the page, so it can't be a stored default.
 
 ## Backup & Restore
 

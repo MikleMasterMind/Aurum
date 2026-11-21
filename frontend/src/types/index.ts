@@ -613,6 +613,16 @@ export interface AppSettings {
   risky_allocation_threshold_percent: number;
   idle_cash_threshold_amount: string;
   idle_cash_threshold_days: number;
+  /** Which period the corresponding page's chart opens with — the same
+   * string choices each page's own selector offers (see the backend's
+   * Literal unions in schemas/settings.py, which are the validation
+   * point). Spelled out rather than imported from lib/dateRange so this
+   * module stays import-free, and without "custom": it needs years
+   * entered live on the page, so it can't be a stored default. */
+  default_net_worth_range: NetWorthRange;
+  default_cash_flow_range: "all" | "this_year" | "5y";
+  default_reports_range: "all" | "this_year" | "5y";
+  default_crypto_range: CryptoRange;
   /** Read-only: the running backend release. Comes back here rather than
    * from /api/health, which is served without auth. */
   app_version: string;

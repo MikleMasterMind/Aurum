@@ -367,6 +367,8 @@ const ru = {
   "settings.currency": "Основная валюта",
   "settings.currencyHint":
     "Меняет только отображение сумм — уже введённые значения не пересчитываются и не конвертируются.",
+  "settings.chartDefaults": "Периоды графиков",
+  "settings.chartDefaultsHint": "Какой период выбран на графике сразу при открытии страницы.",
   "settings.alertsTitle": "Проактивные предупреждения",
   "settings.alertsHint": "Через сколько месяцев подряд показывать предупреждение на Dashboard и «Капитал».",
   "settings.negativeCashFlowThresholdLabel": "Расходы превышают доходы, мес. подряд",
@@ -933,6 +935,8 @@ const en: Record<keyof typeof ru, string> = {
   "settings.currency": "Primary currency",
   "settings.currencyHint":
     "Only changes how amounts are displayed — values you've already entered aren't recalculated or converted.",
+  "settings.chartDefaults": "Chart periods",
+  "settings.chartDefaultsHint": "The period a chart opens with when you open the page.",
   "settings.alertsTitle": "Proactive alerts",
   "settings.alertsHint": "How many consecutive months before showing a warning on Dashboard and Net Worth.",
   "settings.negativeCashFlowThresholdLabel": "Expenses exceed income, consecutive months",

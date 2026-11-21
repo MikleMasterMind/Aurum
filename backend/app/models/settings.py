@@ -29,3 +29,14 @@ class AppSettings(Base):
     # working. In the app's display currency (see `currency` above).
     idle_cash_threshold_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("1000"))
     idle_cash_threshold_days: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
+    # Which period each page's chart opens with. The string choices mirror
+    # the frontend's per-page selector types exactly (NetWorthRange /
+    # RangePreset / CryptoRange in frontend/src/types/index.ts) — the
+    # schemas/settings.py Literal unions are the single validation point, so
+    # a value that isn't one of the page's own pills can never be stored.
+    # "custom" is deliberately not among the cash-flow/report choices: it
+    # only makes sense picked live, where the user also enters the years.
+    default_net_worth_range: Mapped[str] = mapped_column(String(10), nullable=False, default="5y")
+    default_cash_flow_range: Mapped[str] = mapped_column(String(10), nullable=False, default="this_year")
+    default_reports_range: Mapped[str] = mapped_column(String(10), nullable=False, default="all")
+    default_crypto_range: Mapped[str] = mapped_column(String(8), nullable=False, default="all")

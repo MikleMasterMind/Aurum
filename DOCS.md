@@ -797,7 +797,7 @@ Single row, created automatically on first run — there's nothing to create, on
   "risky_allocation_threshold_percent": 20,
   "idle_cash_threshold_amount": "1000.00",
   "idle_cash_threshold_days": 60,
-  "app_version": "1.1.9"
+  "app_version": "1.2.0"
 }
 ```
 

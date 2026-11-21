@@ -9,10 +9,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
-COPY . .
+# The build context is the repo root (see docker-compose.yml), not
+# ./backend: the image also ships the agent package that powers the
+# Assistant page's chat. Only these two trees are copied, so nothing else
+# from the context can leak into the image; the root .dockerignore keeps
+# the context upload itself small and .env-free.
+COPY backend/ .
+COPY agent/aurum_agent ./aurum_agent
 
 # Drop root. The app never writes to disk (PYTHONDONTWRITEBYTECODE above, no
 # uploads, no local cache), so it only needs read access to /app — which is

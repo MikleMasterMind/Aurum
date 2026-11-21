@@ -18,6 +18,7 @@ const ru = {
   "nav.recurring": "Регулярные",
   "nav.goals": "Цели",
   "nav.advice": "Советы",
+  "nav.assistant": "Ассистент",
   "nav.settings": "Настройки",
   "nav.comingSoon": "скоро",
 
@@ -535,6 +536,35 @@ const ru = {
   "months.oct": "Окт",
   "months.nov": "Ноя",
   "months.dec": "Дек",
+
+  "assistant.model": "Модель",
+  "assistant.newChat": "Новый диалог",
+  "assistant.placeholder": "Спросите что-нибудь или опишите трату…",
+  "assistant.thinking": "Думаю…",
+  "assistant.send": "Отправить",
+  "assistant.empty":
+    "Опишите трату обычным текстом — ассистент подберёт счёт и категорию и покажет запись перед сохранением.",
+  "assistant.confirm.title": "Подтверждение записи",
+  "assistant.confirm.approve": "Записать",
+  "assistant.confirm.decline": "Не записывать",
+  "assistant.duplicates": "Похожая транзакция уже есть:",
+  "assistant.unconfigured.title": "Ассистент не настроен",
+  "assistant.unconfigured.hint":
+    "Добавьте ключ AURUM_AGENT_LLM_API_KEY в корневой .env (см. .env.example и agent/README.md) и перезапустите стек: docker compose up -d.",
+  "assistant.error.turnFailed": "Ход не удался — попробуйте ещё раз или начните новый диалог.",
+  "assistant.error.confirmRequired": "Сначала подтвердите или отклоните предложенную запись.",
+  "assistant.error.confirmExpired": "Подтверждение устарело — начните новый диалог.",
+  "assistant.error.generic": "Что-то пошло не так — попробуйте ещё раз.",
+  "assistant.action.createTransaction": "Создать транзакцию",
+  "assistant.action.updateTransaction": "Изменить транзакцию",
+  "assistant.action.deleteTransaction": "Удалить транзакцию",
+  "assistant.action.createAccount": "Создать счёт",
+  "assistant.action.updateAccount": "Изменить счёт",
+  "assistant.action.deleteAccount": "Удалить счёт — вместе со ВСЕМИ его транзакциями",
+  "assistant.action.createCategory": "Создать категорию",
+  "assistant.action.updateCategory": "Изменить категорию",
+  "assistant.action.deleteCategory": "Удалить категорию",
+  "assistant.action.createTag": "Создать тег",
 };
 
 const en: Record<keyof typeof ru, string> = {
@@ -551,6 +581,7 @@ const en: Record<keyof typeof ru, string> = {
   "nav.recurring": "Recurring",
   "nav.goals": "Goals",
   "nav.advice": "Advice",
+  "nav.assistant": "Assistant",
   "nav.settings": "Settings",
   "nav.comingSoon": "soon",
 
@@ -1064,6 +1095,35 @@ const en: Record<keyof typeof ru, string> = {
   "months.oct": "Oct",
   "months.nov": "Nov",
   "months.dec": "Dec",
+
+  "assistant.model": "Model",
+  "assistant.newChat": "New chat",
+  "assistant.placeholder": "Ask anything or describe a spend…",
+  "assistant.thinking": "Thinking…",
+  "assistant.send": "Send",
+  "assistant.empty":
+    "Describe a spend in plain words — the assistant picks the account and category and shows the entry before saving.",
+  "assistant.confirm.title": "Confirm the write",
+  "assistant.confirm.approve": "Save",
+  "assistant.confirm.decline": "Don't save",
+  "assistant.duplicates": "Looks like a similar transaction already exists:",
+  "assistant.unconfigured.title": "The assistant is not configured",
+  "assistant.unconfigured.hint":
+    "Add AURUM_AGENT_LLM_API_KEY to the root .env (see .env.example and agent/README.md) and restart the stack: docker compose up -d.",
+  "assistant.error.turnFailed": "That turn failed — try again or start a new chat.",
+  "assistant.error.confirmRequired": "First approve or decline the proposed entry.",
+  "assistant.error.confirmExpired": "The confirmation has expired — start a new chat.",
+  "assistant.error.generic": "Something went wrong — try again.",
+  "assistant.action.createTransaction": "Create transaction",
+  "assistant.action.updateTransaction": "Update transaction",
+  "assistant.action.deleteTransaction": "Delete transaction",
+  "assistant.action.createAccount": "Create account",
+  "assistant.action.updateAccount": "Update account",
+  "assistant.action.deleteAccount": "Delete the account — with ALL its transactions",
+  "assistant.action.createCategory": "Create category",
+  "assistant.action.updateCategory": "Update category",
+  "assistant.action.deleteCategory": "Delete category",
+  "assistant.action.createTag": "Create tag",
 };
 
 const translations: Record<Language, Record<keyof typeof ru, string>> = { ru, en };

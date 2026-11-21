@@ -11,6 +11,7 @@ from app.api.routes import (
     budgets,
     cash_flow,
     categories,
+    chat,
     crypto,
     dashboard,
     goals,
@@ -25,6 +26,7 @@ from app.api.routes import (
 from app.core.config import APP_VERSION, get_settings
 from app.db.seed import seed_default_account, seed_default_app_settings, seed_default_categories
 from app.db.session import AsyncSessionLocal
+from app.services.agent_chat import close_chat_service
 
 settings = get_settings()
 
@@ -36,6 +38,10 @@ async def lifespan(app: FastAPI):
         await seed_default_account(session)
         await seed_default_app_settings(session)
     yield
+    # The chat service is built lazily on the first conversation; if one
+    # ever happened, its httpx client is released on the way out. A no-op
+    # when the instance has no LLM key configured.
+    await close_chat_service()
 
 
 app = FastAPI(
@@ -87,6 +93,7 @@ app.include_router(recurring.router, prefix="/api")
 app.include_router(cash_flow.router, prefix="/api")
 app.include_router(tags.router, prefix="/api")
 app.include_router(crypto.router, prefix="/api")
+app.include_router(chat.router, prefix="/api")
 
 
 @app.get("/api/health")

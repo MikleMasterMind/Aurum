@@ -14,13 +14,13 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import uuid4
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from .graph import PENDING_KEY
+from .graph import PENDING_KEY, final_reply
 
 # Async line source: returns the next user input, EOFError ends the
 # session. Injection keeps the loop testable without a real stdin.
@@ -158,16 +158,8 @@ async def repl_loop(graph: Any, console: Console, read_line: ReadLine) -> None:
             console.print("Если повторяется — /reset начнёт с чистого листа.")
             continue
 
-        last_message = result["messages"][-1]
         # A tool-only turn cannot END the graph, but an empty answer
         # still prints nothing rather than an empty markdown block.
-        if isinstance(last_message, AIMessage) and last_message.content:
-            content = last_message.content
-            if not isinstance(content, str):
-                # Some providers send block lists instead of plain
-                # strings; keep the text parts, drop the rest.
-                content = " ".join(
-                    str(block.get("text", "")) for block in content if isinstance(block, dict)
-                )
-            if content.strip():
-                console.print(Markdown(content))
+        content = final_reply(result)
+        if content:
+            console.print(Markdown(content))

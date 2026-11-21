@@ -2,21 +2,24 @@ import { useEffect } from "react";
 import { NavLink } from "react-router-dom";
 import { PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import { Logo } from "@/components/layout/Logo";
-import { NAV_ITEMS } from "@/lib/navigation";
+import { NAV_ITEMS, visibleNavItems } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "@/lib/i18n";
 
 interface NavListProps {
   collapsed: boolean;
+  /** Routes the user hid via Settings — dropped from the list here; the
+   * pages themselves stay reachable by direct URL. */
+  hiddenRoutes: string[];
   onNavigate?: () => void;
 }
 
-function NavList({ collapsed, onNavigate }: NavListProps) {
+function NavList({ collapsed, hiddenRoutes, onNavigate }: NavListProps) {
   const { t } = useTranslation();
 
   return (
     <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2.5 py-2">
-      {NAV_ITEMS.map((item) => {
+      {visibleNavItems(NAV_ITEMS, hiddenRoutes).map((item) => {
         const Icon = item.icon;
         const label = t(item.labelKey);
         if (item.disabled) {
@@ -71,9 +74,12 @@ interface SidebarProps {
   onToggleCollapsed: () => void;
   mobileOpen: boolean;
   onCloseMobile: () => void;
+  /** Routes hidden via Settings (localStorage state lives in App.tsx) —
+   * filtered out of both the desktop rail and the mobile drawer below. */
+  hiddenRoutes: string[];
 }
 
-export function Sidebar({ collapsed, onToggleCollapsed, mobileOpen, onCloseMobile }: SidebarProps) {
+export function Sidebar({ collapsed, onToggleCollapsed, mobileOpen, onCloseMobile, hiddenRoutes }: SidebarProps) {
   const { t } = useTranslation();
 
   useEffect(() => {
@@ -112,7 +118,7 @@ export function Sidebar({ collapsed, onToggleCollapsed, mobileOpen, onCloseMobil
             <span className="text-lg font-semibold tracking-tight text-text-primary">Aurum</span>
           </div>
         )}
-        <NavList collapsed={collapsed} />
+        <NavList collapsed={collapsed} hiddenRoutes={hiddenRoutes} />
         <div className="border-t border-border p-2.5">
           <button
             type="button"
@@ -147,7 +153,7 @@ export function Sidebar({ collapsed, onToggleCollapsed, mobileOpen, onCloseMobil
                 <X size={18} />
               </button>
             </div>
-            <NavList collapsed={false} onNavigate={onCloseMobile} />
+            <NavList collapsed={false} hiddenRoutes={hiddenRoutes} onNavigate={onCloseMobile} />
           </aside>
         </div>
       )}

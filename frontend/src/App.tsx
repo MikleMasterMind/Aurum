@@ -7,6 +7,7 @@ import { useAppSettings } from "@/hooks/useSettings";
 import { setCurrency } from "@/lib/i18n";
 import { AccountsPage } from "@/pages/AccountsPage";
 import { AdvicePage } from "@/pages/AdvicePage";
+import { AssistantPage } from "@/pages/AssistantPage";
 import { BudgetPage } from "@/pages/BudgetPage";
 import { CashFlowPage } from "@/pages/CashFlowPage";
 import { CategoriesPage } from "@/pages/CategoriesPage";
@@ -62,6 +63,7 @@ export default function App() {
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/budget" element={<BudgetPage />} />
             <Route path="/advice" element={<AdvicePage />} />
+            <Route path="/assistant" element={<AssistantPage />} />
             <Route path="/goals" element={<GoalsPage />} />
             <Route path="/recurring" element={<RecurringPage />} />
             <Route path="/settings" element={<SettingsPage />} />

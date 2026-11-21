@@ -618,3 +618,41 @@ export interface AppSettings {
   app_version: string;
 }
 
+/** The assistant chat's shapes (see backend/app/schemas/chat.py). Thread
+ * ids are opaque keys kept in localStorage; the server keeps the actual
+ * conversation in its own memory. */
+export interface ChatStatus {
+  configured: boolean;
+  model: string | null;
+}
+
+/** One write the agent proposed — nothing has reached the database yet;
+ * the card waits for the user's per-call decision. */
+export interface ChatPendingCall {
+  id: string;
+  name: string;
+  /** Raw fields exactly as they would be sent — no id-to-name resolution,
+   * the same honesty rule as the terminal's preview. */
+  args: Record<string, unknown>;
+  duplicates: ChatDuplicateInfo[] | null;
+}
+
+/** A likely existing copy of the transaction about to be created; the
+ * warning is advisory, the user still decides. */
+export interface ChatDuplicateInfo {
+  id: number;
+  date: string;
+  amount: string;
+  description: string;
+  account_name?: string | null;
+  category_name?: string | null;
+}
+
+/** At most one field is meaningful per turn: a reply, a confirmation
+ * request, or an error code the page localizes. */
+export interface ChatTurn {
+  reply: string;
+  pending: ChatPendingCall[];
+  error: string | null;
+}
+

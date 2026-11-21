@@ -1,6 +1,7 @@
 import {
   Activity,
   ArrowLeftRight,
+  Bot,
   Calculator,
   Coins,
   Flag,
@@ -39,5 +40,6 @@ export const NAV_ITEMS: NavItem[] = [
   { labelKey: "nav.recurring", to: "/recurring", icon: Repeat },
   { labelKey: "nav.goals", to: "/goals", icon: Flag },
   { labelKey: "nav.advice", to: "/advice", icon: Lightbulb },
+  { labelKey: "nav.assistant", to: "/assistant", icon: Bot },
   { labelKey: "nav.settings", to: "/settings", icon: Settings },
 ];

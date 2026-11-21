@@ -22,7 +22,14 @@ services:
       retries: 10
 
   backend:
-    build: ./backend
+    # Repo root as the build context (not ./backend): the image also ships
+    # the agent package (agent/aurum_agent) behind the Assistant page's
+    # chat — see the COPY lines in backend/Dockerfile. The root
+    # .dockerignore keeps this context small and keeps the local .env out
+    # of the build.
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     restart: unless-stopped
     # Nothing here ever needs to gain privileges (no setuid binaries, no sudo),
     # so forbid it outright — this is what stops a compromised process from
@@ -44,6 +51,16 @@ services:
       # tab's price sync 400s with a clear message until this is set.
       AURUM_COINGECKO_API_KEY: ${AURUM_COINGECKO_API_KEY:-}
       AURUM_ENABLE_DOCS: ${AURUM_ENABLE_DOCS:-true}
+      # The Assistant page in the web UI runs the agent's dialogue graph
+      # inside this container — the same code as the terminal
+      # aurum-agent CLI (see backend/app/services/agent_chat.py). The
+      # three values are the same variables the terminal agent reads; no
+      # key configured means the page shows a setup hint instead of a
+      # chat. Basic auth is not forwarded: the graph talks to its own
+      # uvicorn over the container's loopback.
+      AURUM_AGENT_LLM_API_KEY: ${AURUM_AGENT_LLM_API_KEY:-}
+      AURUM_AGENT_LLM_BASE_URL: ${AURUM_AGENT_LLM_BASE_URL:-https://api.z.ai/api/paas/v4/}
+      AURUM_AGENT_LLM_MODEL: ${AURUM_AGENT_LLM_MODEL:-glm-5.3-flash}
     depends_on:
       db:
         condition: service_healthy

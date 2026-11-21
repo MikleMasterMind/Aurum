@@ -1,3 +1,8 @@
+# NOTE: the shipped build no longer uses ./backend as its build context —
+# docker-compose.yml builds the backend image from the repo root
+# (context: ., dockerfile: backend/Dockerfile), and Docker then reads the
+# ROOT .dockerignore, not this file. What remains here only applies to a
+# manual `docker build backend/`. Keep the two files in sync.
 __pycache__
 *.pyc
 .venv

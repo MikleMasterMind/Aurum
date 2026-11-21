@@ -49,8 +49,17 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: backend/requirements-dev.txt
+          cache-dependency-path: |
+            backend/requirements-dev.txt
+            agent/pyproject.toml
       - run: pip install -r requirements-dev.txt
+      # The Assistant chat tests exercise the agent/ package (its LangGraph
+      # graph is reused by the backend service), so it is installed from
+      # source — a local package, not published anywhere. Installed AFTER
+      # requirements-dev.txt on purpose: its pyproject declares >= ranges,
+      # and pip leaves the already-pinned langchain stack in place, so the
+      # tests run the same versions the Docker image ships.
+      - run: pip install ../agent
       - run: pytest -v
 
   frontend-build:

@@ -1,0 +1,26 @@
+# Applies to the backend image build — docker-compose.yml builds it with the
+# repo root as the context (backend/Dockerfile COPYs only backend/ and
+# agent/aurum_agent). Everything heavy or secret that is not one of those two
+# trees stays out of the context upload. The frontend image is unaffected: it
+# builds from its own ./frontend context with its own .dockerignore.
+#
+# Patterns without a leading path only match at the context root, so the
+# recursive **/ forms below are what actually guard the copied trees — a
+# stray backend/.env or a __pycache__ left by a local test run must never
+# ride into the image (the backend reads .env from its working directory
+# at runtime, so a baked-in one would not even be dead weight).
+.git
+frontend
+e2e
+node_modules
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.DS_Store

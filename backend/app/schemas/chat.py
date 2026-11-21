@@ -32,14 +32,18 @@ class ChatPendingCallOut(BaseModel):
     """One write the model proposed and the graph froze before running.
 
     Rendered as a confirmation card: ``name`` plus raw ``args`` (exactly
-    what would be sent — deliberately no id-to-name resolution, same
-    honesty rule as the terminal preview), with ``duplicates`` advisory
-    for create_transaction.
+    what would be sent — the ids stay the source of truth the write
+    runs on), with ``names`` carrying display labels for the id
+    arguments resolved at preview time (see aurum_agent.naming) and
+    ``duplicates`` advisory for create_transaction. A key missing from
+    ``names`` renders as its raw id — resolution never blocks the
+    confirmation.
     """
 
     id: str
     name: str
     args: dict[str, Any]
+    names: dict[str, str] | None = None
     duplicates: list[dict[str, Any]] | None = None
 
 

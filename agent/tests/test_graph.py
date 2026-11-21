@@ -28,6 +28,11 @@ async def _no_duplicates(**_: Any) -> list[dict[str, Any]]:
     return []
 
 
+async def _no_names(_calls: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+    """Default name resolver for scenarios that don't test resolution."""
+    return {}
+
+
 def tool_call(call_id: str, name: str, args: dict[str, Any]) -> AIMessage:
     """A model message asking for one tool call."""
     return AIMessage(
@@ -36,13 +41,19 @@ def tool_call(call_id: str, name: str, args: dict[str, Any]) -> AIMessage:
     )
 
 
-def make_graph(client: httpx.AsyncClient, model: ScriptedModel, dup: Any = None) -> Any:
+def make_graph(
+    client: httpx.AsyncClient,
+    model: ScriptedModel,
+    dup: Any = None,
+    names: Any = None,
+) -> Any:
     bundle = build_tools(client)
     return build_agent_graph(
         model,
         bundle,
         system_prompt=SYSTEM_PROMPT,
         duplicate_checker=dup or _no_duplicates,
+        name_resolver=names or _no_names,
         checkpointer=InMemorySaver(),
     )
 
@@ -215,6 +226,121 @@ async def test_create_transaction_preview_carries_duplicates(
 
     entry = result["__interrupt__"][0].value[PENDING_KEY][0]
     assert entry["duplicates"][0]["id"] == 7
+
+
+async def test_pending_preview_carries_resolved_names(mock_client_factory: Any) -> None:
+    async def names(calls: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+        return {
+            calls[0]["id"]: {
+                "account_id": "Карта",
+                "category_id": "Продукты",
+                "tag_ids": "кофе, книги",
+            }
+        }
+
+    client, _ = mock_client_factory(lambda request: httpx.Response(201, json={"id": 5}))
+    model = ScriptedModel()
+    model.queue(
+        tool_call(
+            "c1",
+            "create_transaction",
+            {
+                "account_id": 1,
+                "type": "expense",
+                "amount": 120.0,
+                "description": "Кофе",
+                "date": "2026-11-21",
+                "category_id": 4,
+                "tag_ids": [3, 7],
+            },
+        )
+    )
+    model.queue(AIMessage(content="Добавил"))
+    graph = make_graph(client, model, names=names)
+
+    result = await graph.ainvoke({"messages": [HumanMessage("кофе за 120")]}, CONFIG)
+
+    entry = result["__interrupt__"][0].value[PENDING_KEY][0]
+    assert entry["names"]["account_id"] == "Карта"
+    assert entry["names"]["category_id"] == "Продукты"
+    assert entry["names"]["tag_ids"] == "кофе, книги"
+    # The raw arguments are untouched — the write still runs on the
+    # ids, exactly what the model proposed; names are display only.
+    assert entry["args"]["account_id"] == 1
+    assert entry["args"]["tag_ids"] == [3, 7]
+
+
+async def test_unresolved_batch_has_no_names_key(mock_client_factory: Any) -> None:
+    # Nothing resolved (the default stub) — no empty maps in the
+    # payload, the renderer falls back to raw args.
+    client, _ = mock_client_factory(lambda request: httpx.Response(201, json={"id": 5}))
+    model = ScriptedModel()
+    model.queue(
+        tool_call(
+            "c1",
+            "create_transaction",
+            {
+                "account_id": 1,
+                "type": "expense",
+                "amount": 120.0,
+                "description": "Кофе",
+                "date": "2026-11-21",
+            },
+        )
+    )
+    model.queue(AIMessage(content="Добавил"))
+    graph = make_graph(client, model)
+
+    result = await graph.ainvoke({"messages": [HumanMessage("кофе за 120")]}, CONFIG)
+
+    entry = result["__interrupt__"][0].value[PENDING_KEY][0]
+    assert "names" not in entry
+
+
+async def test_name_resolver_runs_once_across_interrupt_and_resume(
+    mock_client_factory: Any,
+) -> None:
+    # Same placement rule as the duplicate check: the resolver lives
+    # in prepare (which completes and checkpoints) — never in confirm.
+    # One interrupt+resume cycle must cost exactly one resolver call,
+    # and a mixed batch must show it only the write: reads have no card
+    # to enrich.
+    resolver_calls: list[list[dict[str, Any]]] = []
+
+    async def counting_names(calls: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+        resolver_calls.append(calls)
+        return {}
+
+    client, calls = mock_client_factory(lambda request: httpx.Response(201, json={"id": 5}))
+    model = ScriptedModel()
+    model.queue(
+        AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "list_accounts", "args": {}, "id": "c0", "type": "tool_call"},
+                {
+                    "name": "create_transaction",
+                    "args": {
+                        "account_id": 1,
+                        "type": "expense",
+                        "amount": 120.0,
+                        "description": "Кофе",
+                        "date": "2026-11-21",
+                    },
+                    "id": "c1",
+                    "type": "tool_call",
+                },
+            ],
+        )
+    )
+    model.queue(AIMessage(content="Добавил"))
+    graph = make_graph(client, model, names=counting_names)
+
+    await graph.ainvoke({"messages": [HumanMessage("счета и кофе")]}, CONFIG)
+    await graph.ainvoke(Command(resume=[True]), CONFIG)
+
+    assert len(resolver_calls) == 1
+    assert [seen["id"] for seen in resolver_calls[0]] == ["c1"]
 
 
 async def test_malformed_resume_declines_everything(mock_client_factory: Any) -> None:

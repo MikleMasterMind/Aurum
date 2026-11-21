@@ -50,12 +50,17 @@ async def _no_duplicates(**_: Any) -> list[dict[str, Any]]:
     return []
 
 
+async def _no_names(_calls: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+    return {}
+
+
 def make_graph(client: Any, model: ScriptedModel) -> Any:
     return build_agent_graph(
         model,
         build_tools(client),
         system_prompt=SYSTEM_PROMPT,
         duplicate_checker=_no_duplicates,
+        name_resolver=_no_names,
         checkpointer=InMemorySaver(),
     )
 
@@ -98,6 +103,29 @@ def test_describe_call_labels_known_actions() -> None:
 
 def test_describe_call_passes_unknown_names_through() -> None:
     assert describe_call("future_tool", {"x": 1}) == "future_tool: x=1"
+
+
+def test_describe_call_shows_resolved_names() -> None:
+    # Id arguments with a resolved name become «счёт=«Карта»»; the
+    # order follows the args, everything else stays raw.
+    line = describe_call(
+        "create_transaction",
+        {"account_id": 1, "amount": 120.0, "category_id": 4, "tag_ids": [3, 7]},
+        {"account_id": "Карта", "category_id": "Продукты", "tag_ids": "кофе, книги"},
+    )
+
+    assert line == (
+        "Создать транзакцию: счёт=«Карта», amount=120.0, "
+        "категория=«Продукты», теги=«кофе, книги»"
+    )
+
+
+def test_describe_call_without_names_keeps_raw_ids() -> None:
+    # No payload names (or a failed resolution) — the raw fields,
+    # unchanged: the preview must never hide an id it cannot name.
+    assert describe_call("create_transaction", {"account_id": 1}) == (
+        "Создать транзакцию: account_id=1"
+    )
 
 
 @pytest.mark.parametrize(
@@ -144,6 +172,21 @@ def test_print_pending_renders_duplicate_warning() -> None:
     assert "Создать транзакцию" in output
     assert "похожая транзакция уже есть" in output
     assert "#7" in output
+
+
+def test_print_pending_renders_resolved_names() -> None:
+    # The payload's names ride through to the line: the destructive
+    # label names the very account it is about to delete.
+    console, buffer = make_console()
+    entry = {
+        "name": "delete_account",
+        "args": {"account_id": 3},
+        "names": {"account_id": "Карта"},
+    }
+
+    print_pending(console, entry)
+
+    assert "счёт=«Карта»" in buffer.getvalue()
 
 
 async def test_full_session_write_approved(mock_client_factory: Any) -> None:

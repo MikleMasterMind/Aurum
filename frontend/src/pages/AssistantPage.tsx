@@ -59,7 +59,15 @@ function loadPersistedView(): PersistedChatView {
         typeof call.id === "string" &&
         typeof call.name === "string" &&
         typeof call.args === "object" &&
-        call.args !== null
+        call.args !== null &&
+        // names is optional (an entry from before the resolution, or a
+        // write with nothing to resolve) but when present it must be a
+        // string map — the renderer interpolates its values as-is.
+        (call.names === undefined ||
+          call.names === null ||
+          (typeof call.names === "object" &&
+            !Array.isArray(call.names) &&
+            Object.values(call.names).every((value) => typeof value === "string")))
     );
     const decided =
       parsed.decided && typeof parsed.decided === "object" && !Array.isArray(parsed.decided)
@@ -99,6 +107,21 @@ const ACTION_KEYS: Record<string, TranslationKey> = {
   create_tag: "assistant.action.createTag",
 };
 
+// Labels for the id arguments whose resolved names the payload may
+// carry — the same key set as the terminal's ARG_LABELS (the resolver
+// itself is aurum_agent/naming.py, the labels agent/aurum_agent/repl.py).
+// The formatting is each frontend's own: the card pairs a localized
+// label with the name, the terminal keeps its key=value dump shape.
+// An unknown key falls back to the raw key — honest, and future id
+// arguments stay legible.
+const ARG_KEYS: Record<string, TranslationKey> = {
+  account_id: "assistant.arg.account",
+  transfer_account_id: "assistant.arg.transferAccount",
+  category_id: "assistant.arg.category",
+  parent_id: "assistant.arg.parentCategory",
+  tag_ids: "assistant.arg.tags",
+};
+
 interface UiMessage {
   role: "user" | "assistant";
   text: string;
@@ -107,16 +130,30 @@ interface UiMessage {
 
 function actionLabel(name: string, t: ReturnType<typeof useTranslation>["t"]): string {
   const key = ACTION_KEYS[name];
-  // Deliberately no id-to-name resolution — the card shows exactly what
-  // would be sent, same honesty rule as the terminal's preview.
+  // The action stays a label; the honesty of the arguments lives in
+  // formatArgs — ids turn into names only when the payload resolved
+  // them, otherwise they show raw.
   return key ? t(key) : name;
 }
 
 // key=value pairs for the card body, mirroring the terminal's
-// describe_call: raw fields, one line, nothing hidden.
-function formatArgs(args: Record<string, unknown>): string {
+// describe_call: one line, nothing hidden. The id arguments render as
+// «Счёт: Карта» when the payload carries a resolved name; everything
+// else — and any id that failed to resolve — stays raw.
+function formatArgs(
+  args: Record<string, unknown>,
+  names: Record<string, string> | null | undefined,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
   return Object.entries(args)
-    .map(([key, value]) => `${key}=${JSON.stringify(value) ?? "null"}`)
+    .map(([key, value]) => {
+      const name = names?.[key];
+      if (name !== undefined) {
+        const label = ARG_KEYS[key];
+        return `${label ? t(label) : key}: ${name}`;
+      }
+      return `${key}=${JSON.stringify(value) ?? "null"}`;
+    })
     .join(", ");
 }
 
@@ -360,7 +397,7 @@ export function AssistantPage() {
                   </p>
                   {Object.keys(call.args).length > 0 && (
                     <p className="mt-1 break-all font-mono text-xs text-text-muted">
-                      {formatArgs(call.args)}
+                      {formatArgs(call.args, call.names, t)}
                     </p>
                   )}
                   {call.duplicates && call.duplicates.length > 0 && (

@@ -225,9 +225,51 @@ async def test_write_proposal_returns_pending_card(
     assert card["name"] == "create_transaction"
     assert card["args"]["amount"] == 340.0
     assert card["args"]["description"] == description
+    # The card names the account instead of its id: the graph's
+    # prepare node resolved it through this same app.
+    accounts = await client.get("/accounts")
+    assert card["names"]["account_id"] == accounts.json()[0]["name"]
     # Nothing similar exists yet — no duplicate warning on the card.
     assert card["duplicates"] == []
     # ...and nothing in the database either: the gate held the write.
+    assert await _posted_transactions(client, description) == []
+
+
+async def test_pending_card_names_categories_and_tags(
+    client: AsyncClient, chat_service: Any, account_id: int, categories: dict[str, dict[str, Any]]
+) -> None:
+    # A tag to reference in the proposal — tags are user-created, so
+    # the test makes its own before the model can name it.
+    tag_resp = await client.post("/tags", json={"name": "кофе"})
+    assert tag_resp.status_code == 201
+    tag_id = tag_resp.json()["id"]
+    groceries = categories["Groceries"]
+    description = "Кофе с книгой"
+    chat_service(
+        tool_call(
+            "create_transaction",
+            {
+                "account_id": account_id,
+                "type": "expense",
+                "amount": 340.0,
+                "description": description,
+                "date": date.today().isoformat(),
+                "category_id": groceries["id"],
+                "tag_ids": [tag_id],
+            },
+        ),
+        AIMessage(content="Записал."),
+    )
+    thread = await _new_thread(client)
+    resp = await client.post("/chat/messages", json={"thread_id": thread, "text": "запиши"})
+    card = resp.json()["pending"][0]
+    # Every id argument the card can name, it names: the category by
+    # its list entry, the tags as one joined label.
+    assert card["names"]["category_id"] == "Groceries"
+    assert card["names"]["tag_ids"] == "кофе"
+    # Raw args are untouched — the write will still run on the ids.
+    assert card["args"]["category_id"] == groceries["id"]
+    assert card["args"]["tag_ids"] == [tag_id]
     assert await _posted_transactions(client, description) == []
 
 

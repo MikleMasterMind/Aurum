@@ -26,6 +26,7 @@ from .api_client import SETTINGS_PATH, AurumApiError, AurumClient
 from .config import ConfigError, load_config
 from .dedup import find_duplicates
 from .graph import build_agent_graph
+from .naming import find_names
 from .prompts import build_system_prompt
 from .repl import ReadLine, repl_loop
 from .tools import build_tools
@@ -94,6 +95,9 @@ async def run() -> int:
             # The duplicate check rides the same client and inherits
             # its "degrade, never block" failure behavior.
             duplicate_checker=partial(find_duplicates, client),
+            # So does the id-to-name resolution for the confirmation
+            # preview — one resolver, both frontends, no fork.
+            name_resolver=partial(find_names, client),
             # Required for interrupt(): the confirm gate cannot freeze
             # and resume without a checkpointer backing the state.
             checkpointer=InMemorySaver(),

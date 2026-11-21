@@ -462,3 +462,40 @@ async def test_router_split_budgets_goals(
         pending = result["__interrupt__"][0].value[PENDING_KEY]
         assert pending[0]["name"] == tool_name
         assert pending[0]["args"] == args_by_name[tool_name]
+
+
+@pytest.mark.parametrize("tool_name", ["get_dashboard_summary", "get_insights"])
+async def test_router_analytics_reads_pass_through(
+    mock_client_factory: Any, tool_name: str
+) -> None:
+    # Analytics tools are read-only — all 8 are pinned as such in
+    # test_every_tool_is_classified; two representatives show the
+    # router never freezes the turn for them.
+    args_by_name: dict[str, dict[str, Any]] = {
+        "get_dashboard_summary": {"year": 2026, "month": 11},
+        "get_insights": {},
+    }
+    body: dict[str, Any] = {
+        "year": 2026,
+        "month": 11,
+        "real_income": "0.00",
+        "spent": "0.00",
+        "net": "0.00",
+        "transferred_out": "0.00",
+        "spending_by_category": [],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # The dashboard case compacts this body; insights passes it
+        # through as-is — routing is all this test asserts on.
+        return httpx.Response(200, json=body)
+
+    client, _ = mock_client_factory(handler)
+    model = ScriptedModel()
+    model.queue(tool_call("c1", tool_name, args_by_name[tool_name]))
+    model.queue(AIMessage(content="…"))
+    graph = make_graph(client, model)
+
+    result = await graph.ainvoke({"messages": [HumanMessage("сколько потратил")]}, CONFIG)
+
+    assert "__interrupt__" not in result

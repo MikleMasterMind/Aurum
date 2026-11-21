@@ -1,4 +1,4 @@
-"""LangChain tools over the Aurum REST API: accounts, categories, tags, transactions, budgets, goals.
+"""LangChain tools over the Aurum REST API: accounts, categories, tags, transactions, budgets, goals, analytics.
 
 Each tool is a thin, typed wrapper around one endpoint: it compacts the
 response into model-friendly JSON, or turns an ``AurumApiError`` into a
@@ -32,6 +32,15 @@ PATH_TAGS = "/tags"
 PATH_TRANSACTIONS = "/transactions"
 PATH_BUDGETS = "/budgets"
 PATH_GOALS = "/goals"
+# Read-only aggregations behind the UI's charts.
+PATH_DASHBOARD = "/dashboard/summary"
+PATH_CASH_FLOW = "/cash-flow"
+PATH_CATEGORY_SPENDING = "/reports/category-spending"
+PATH_CATEGORY_RANKING = "/reports/category-ranking"
+PATH_TAG_RANKING = "/reports/tag-ranking"
+PATH_TAG_SPENDING = "/reports/tag-spending"
+PATH_INSIGHTS = "/insights/alerts"
+PATH_ADVICE = "/advice"
 
 
 @dataclass(frozen=True)
@@ -59,6 +68,19 @@ def _omit_none(**fields: Any) -> dict[str, Any]:
     archived account), so only ``None`` is dropped.
     """
     return {name: value for name, value in fields.items() if value is not None}
+
+
+def _params_without_blanks(params: dict[str, Any]) -> dict[str, Any]:
+    """Drop blank string filters — the backend would 422 on them.
+
+    A model-issued "" or whitespace-only value (usually a date the
+    model left empty) is "not provided", not a filter to send.
+    """
+    return {
+        name: value
+        for name, value in params.items()
+        if not (isinstance(value, str) and not value.strip())
+    }
 
 
 def _make_caller(client: AurumClient) -> Callable[..., Awaitable[str]]:
@@ -179,6 +201,121 @@ def _compact_budget_status_item(item: dict[str, Any]) -> dict[str, Any]:
         "remaining": item.get("remaining"),
         "percent": item.get("percent"),
         "is_over_budget": item.get("is_over_budget"),
+    }
+
+
+def _compact_category_slice(item: dict[str, Any]) -> dict[str, Any]:
+    """One category's share of a dashboard/ranking payload.
+
+    color/icon are UI-only. children ride along only when the slice's
+    spend came from more than one distinct category (subcategory
+    rollup) — that is where a parent's number actually comes from.
+    """
+    compact: dict[str, Any] = {
+        "category_id": item.get("category_id"),
+        "name": item.get("name"),
+        "amount": item.get("amount"),
+        "percent": item.get("percent"),
+    }
+    if "transaction_count" in item:
+        # Dashboard slices don't carry it, ranking items do — never
+        # invent a null where the source had nothing to say.
+        compact["transaction_count"] = item.get("transaction_count")
+    children = item.get("children") or []
+    if children:
+        compact["children"] = [
+            {
+                "category_id": child.get("category_id"),
+                "name": child.get("name"),
+                "amount": child.get("amount"),
+            }
+            for child in children
+        ]
+    return compact
+
+
+def _compact_dashboard_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    """A month's headline numbers; slices via ``_compact_category_slice``."""
+    return {
+        "year": payload.get("year"),
+        "month": payload.get("month"),
+        "real_income": payload.get("real_income"),
+        "spent": payload.get("spent"),
+        "net": payload.get("net"),
+        "transferred_out": payload.get("transferred_out"),
+        "spending_by_category": [
+            _compact_category_slice(item) for item in payload.get("spending_by_category", [])
+        ],
+    }
+
+
+def _compact_category_spending(payload: dict[str, Any]) -> dict[str, Any]:
+    """One category's spend-over-time report; color/icon are UI-only."""
+    return {
+        "category_id": payload.get("category_id"),
+        "category_name": payload.get("category_name"),
+        "start_date": payload.get("start_date"),
+        "end_date": payload.get("end_date"),
+        "total_amount": payload.get("total_amount"),
+        "transaction_count": payload.get("transaction_count"),
+        "average_per_month": payload.get("average_per_month"),
+        "series": payload.get("series", []),
+    }
+
+
+def _compact_category_ranking(payload: dict[str, Any]) -> dict[str, Any]:
+    """All categories ranked by period spend; items via ``_compact_category_slice``."""
+    return {
+        "start_date": payload.get("start_date"),
+        "end_date": payload.get("end_date"),
+        "total_amount": payload.get("total_amount"),
+        "items": [_compact_category_slice(item) for item in payload.get("items", [])],
+    }
+
+
+def _compact_tag_ranking_item(item: dict[str, Any]) -> dict[str, Any]:
+    """One tag's ranked total with its per-category breakdown."""
+    return {
+        "tag_id": item.get("tag_id"),
+        "name": item.get("name"),
+        "amount": item.get("amount"),
+        "percent": item.get("percent"),
+        "transaction_count": item.get("transaction_count"),
+        "categories": [
+            {
+                "category_id": category.get("category_id"),
+                "name": category.get("name"),
+                "amount": category.get("amount"),
+            }
+            for category in item.get("categories", [])
+        ],
+    }
+
+
+def _compact_tag_ranking(payload: dict[str, Any]) -> dict[str, Any]:
+    """Tags ranked by period spend; ``tagged_amount`` stays — with
+    ``total_amount`` it says how much of the period the report covers."""
+    return {
+        "start_date": payload.get("start_date"),
+        "end_date": payload.get("end_date"),
+        "total_amount": payload.get("total_amount"),
+        "tagged_amount": payload.get("tagged_amount"),
+        "items": [_compact_tag_ranking_item(item) for item in payload.get("items", [])],
+    }
+
+
+def _compact_tag_spending(payload: dict[str, Any]) -> dict[str, Any]:
+    """One tag's spend-over-time report — the tag-side twin of
+    ``_compact_category_spending``, same shape with tag fields."""
+    return {
+        "tag_id": payload.get("tag_id"),
+        "tag_name": payload.get("tag_name"),
+        "start_date": payload.get("start_date"),
+        "end_date": payload.get("end_date"),
+        "total_amount": payload.get("total_amount"),
+        "transaction_count": payload.get("transaction_count"),
+        "average_per_month": payload.get("average_per_month"),
+        "series": payload.get("series", []),
     }
 
 
@@ -465,13 +602,9 @@ def build_tools(client: AurumClient) -> ToolBundle:
             page=page,
             page_size=page_size,
         )
-        # A blank string filter ("" or whitespace-only) would sail to
-        # the backend and fail validation — treat it as "not provided".
-        params = {
-            name: value
-            for name, value in params.items()
-            if not (isinstance(value, str) and not value.strip())
-        }
+        # Same blank-filter rule as the analytics tools: an empty
+        # string is "not provided", not a doomed 422 round trip.
+        params = _params_without_blanks(params)
         return await call(
             "GET",
             PATH_TRANSACTIONS,
@@ -738,5 +871,158 @@ def build_tools(client: AurumClient) -> ToolBundle:
     )
     async def delete_goal(goal_id: int) -> str:
         return await call("DELETE", f"{PATH_GOALS}/{goal_id}")
+
+    # --- Analytics & reports (read-only) ---
+
+    @registry.add(
+        "One month's headline numbers: real_income, spent, net, "
+        "transferred_out, plus spending broken down by category "
+        "(category_id, name, amount, percent, children when a slice's "
+        "spend came from more than one distinct category — subcategory "
+        "rollup). year (2000-2100) and month "
+        "(1-12) default to the current month. THE call for 'how did "
+        "this month go' summaries."
+    )
+    async def get_dashboard_summary(year: int | None = None, month: int | None = None) -> str:
+        params = _omit_none(year=year, month=month)
+        return await call(
+            "GET",
+            PATH_DASHBOARD,
+            params=params or None,
+            compact=_compact_dashboard_summary,
+        )
+
+    @registry.add(
+        "Income vs. expense month by month: points (year, month, "
+        "income, expense, net) plus total_income/total_expense/"
+        "total_net. start_date/end_date ('YYYY-MM-DD', inclusive) "
+        "bound the series; omit both for all history. THE call for "
+        "trend questions like 'is my income covering my spending'."
+    )
+    async def get_cash_flow(
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> str:
+        params = _params_without_blanks(_omit_none(start_date=start_date, end_date=end_date))
+        return await call("GET", PATH_CASH_FLOW, params=params or None)
+
+    @registry.add(
+        "One category's spend over time: total_amount, "
+        "transaction_count, average_per_month, month-by-month series "
+        "(year, month, amount). category_id is required — resolve it "
+        "with list_categories. start_date/end_date ('YYYY-MM-DD', "
+        "inclusive) bound the series; omit both for all history."
+    )
+    async def get_category_spending(
+        category_id: int,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> str:
+        params = _params_without_blanks(
+            _omit_none(category_id=category_id, start_date=start_date, end_date=end_date)
+        )
+        return await call(
+            "GET",
+            PATH_CATEGORY_SPENDING,
+            params=params,
+            compact=_compact_category_spending,
+        )
+
+    @registry.add(
+        "All categories ranked by total spend over a period, richest "
+        "first: items (category_id, name, amount, percent, "
+        "transaction_count, children when spend came from "
+        "subcategories) plus the period's total_amount. kind: "
+        "'expense' or 'income'. start_date/end_date ('YYYY-MM-DD', "
+        "inclusive) bound the period; omit both for all history. THE "
+        "call for 'where does my money go' questions."
+    )
+    async def get_category_ranking(
+        kind: str = "expense",
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> str:
+        params = _params_without_blanks(
+            _omit_none(kind=kind, start_date=start_date, end_date=end_date)
+        )
+        return await call(
+            "GET",
+            PATH_CATEGORY_RANKING,
+            params=params,
+            compact=_compact_category_ranking,
+        )
+
+    @registry.add(
+        "All tags ranked by total spend over a period: items (tag_id, "
+        "name, amount, percent of the period's TOTAL spending, "
+        "transaction_count, per-category breakdown), plus total_amount "
+        "and tagged_amount. kind: 'expense' or 'income'. "
+        "start_date/end_date ('YYYY-MM-DD', inclusive) bound the "
+        "period; omit both for all history. A single tag's trend over "
+        "time is get_tag_spending instead."
+    )
+    async def get_tag_ranking(
+        kind: str = "expense",
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> str:
+        params = _params_without_blanks(
+            _omit_none(kind=kind, start_date=start_date, end_date=end_date)
+        )
+        return await call(
+            "GET",
+            PATH_TAG_RANKING,
+            params=params,
+            compact=_compact_tag_ranking,
+        )
+
+    @registry.add(
+        "One tag's spend over time: total_amount, transaction_count, "
+        "average_per_month, month-by-month series (year, month, "
+        "amount). tag_id is required — resolve it with list_tags. "
+        "kind: 'expense' or 'income'. start_date/end_date "
+        "('YYYY-MM-DD', inclusive) bound the series; omit both for "
+        "all history."
+    )
+    async def get_tag_spending(
+        tag_id: int,
+        kind: str = "expense",
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> str:
+        params = _params_without_blanks(
+            _omit_none(tag_id=tag_id, kind=kind, start_date=start_date, end_date=end_date)
+        )
+        return await call(
+            "GET",
+            PATH_TAG_SPENDING,
+            params=params,
+            compact=_compact_tag_spending,
+        )
+
+    @registry.add(
+        "Active financial alerts: negative cash flow streak, declining "
+        "net worth, over-budget category, risky allocation, idle cash. "
+        "Each item is {key, severity, params} with NO ready-made "
+        "sentence — interpret the key and params yourself and build a "
+        "short message in the user's language (e.g. key 'idle_cash' "
+        "with params {count: 2, days: 75} means at least 2 accounts "
+        "have seen no activity for 75 days or more)."
+    )
+    async def get_insights() -> str:
+        return await call("GET", PATH_INSIGHTS)
+
+    @registry.add(
+        "Financial observations: rising spending categories, "
+        "unbudgeted top expenses, savings-rate trend. Each item is "
+        "{key, tone, params} with NO ready-made sentence — interpret "
+        "the key and params yourself and build a short message in the "
+        "user's language (e.g. key 'rising_category' with params "
+        "{category: 'Dining', percent: 34, current: 850.0, average: "
+        "635.0} means this month's Dining spend is 34% above its "
+        "usual average)."
+    )
+    async def get_advice() -> str:
+        return await call("GET", PATH_ADVICE)
 
     return registry.bundle()

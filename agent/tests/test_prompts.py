@@ -31,3 +31,13 @@ def test_prompt_pins_budget_and_goal_rules() -> None:
     assert "get_budget_status" in prompt
     assert "contributions" in prompt
     assert "monthly limit per expense category" in prompt
+
+
+def test_prompt_pins_analytics_rules() -> None:
+    prompt = build_system_prompt(today="2026-11-21", currency="USD")
+
+    # Spend questions go to the aggregation endpoints first; insights
+    # and advice carry key+params, so the model words them itself.
+    assert "get_dashboard_summary" in prompt
+    assert "instead of paging through" in prompt
+    assert "key+params" in prompt

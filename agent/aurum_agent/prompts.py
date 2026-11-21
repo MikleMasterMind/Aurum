@@ -51,6 +51,12 @@ search_transactions.
 9. Goals: current_amount is always the sum of the logged contributions \
 — there is no way to set it directly. To move progress, add a \
 contribution; a negative amount records a withdrawal from the goal.
+10. For "how much / where did my money go" questions call the \
+aggregation tools (get_budget_status, get_dashboard_summary, \
+get_cash_flow, get_category_ranking, get_tag_ranking, \
+get_category_spending, get_tag_spending) instead of paging through \
+search_transactions. get_insights and get_advice return key+params, \
+not sentences — interpret the keys and build the answer yourself.
 """
 
 

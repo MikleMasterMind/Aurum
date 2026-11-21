@@ -127,6 +127,161 @@ def goal_payload() -> list[dict[str, Any]]:
     ]
 
 
+def dashboard_payload() -> dict[str, Any]:
+    # color/icon on both levels on purpose: compaction must drop
+    # them, the children (subcategory rollup) must survive.
+    return {
+        "year": 2026,
+        "month": 11,
+        "real_income": "5200.00",
+        "spent": "3120.45",
+        "net": "2079.55",
+        "transferred_out": "500.00",
+        "spending_by_category": [
+            {
+                "category_id": 4,
+                "name": "Groceries",
+                "color": "#22c55e",
+                "icon": "shopping-cart",
+                "amount": "612.30",
+                "percent": 19.6,
+                "children": [
+                    {
+                        "category_id": 5,
+                        "name": "Snacks",
+                        "color": "#a3e635",
+                        "icon": "cookie",
+                        "amount": "112.30",
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def cash_flow_payload() -> dict[str, Any]:
+    return {
+        "start_date": None,
+        "end_date": None,
+        "points": [
+            {"year": 2026, "month": 10, "income": "5200.00", "expense": "3400.00", "net": "1800.00"}
+        ],
+        "total_income": "62400.00",
+        "total_expense": "40800.00",
+        "total_net": "21600.00",
+    }
+
+
+def category_spending_payload() -> dict[str, Any]:
+    # Extra color/icon on purpose: compaction must drop them.
+    return {
+        "category_id": 4,
+        "category_name": "Groceries",
+        "category_color": "#22c55e",
+        "category_icon": "shopping-cart",
+        "start_date": None,
+        "end_date": None,
+        "total_amount": "612.30",
+        "transaction_count": 14,
+        "average_per_month": "306.15",
+        "series": [
+            {"year": 2026, "month": 10, "amount": "306.15"},
+            {"year": 2026, "month": 11, "amount": "306.15"},
+        ],
+    }
+
+
+def category_ranking_payload() -> dict[str, Any]:
+    return {
+        "start_date": None,
+        "end_date": None,
+        "total_amount": "3120.45",
+        "items": [
+            {
+                "category_id": 4,
+                "name": "Groceries",
+                "color": "#22c55e",
+                "icon": "shopping-cart",
+                "amount": "612.30",
+                "percent": 19.6,
+                "transaction_count": 14,
+                "children": [],
+            }
+        ],
+    }
+
+
+def tag_ranking_payload() -> dict[str, Any]:
+    return {
+        "start_date": None,
+        "end_date": None,
+        "total_amount": "3120.45",
+        "tagged_amount": "1200.00",
+        "items": [
+            {
+                "tag_id": 3,
+                "name": "weekend",
+                "color": "#38bdf8",
+                "amount": "800.00",
+                "percent": 25.6,
+                "transaction_count": 5,
+                "categories": [
+                    {
+                        "category_id": 4,
+                        "name": "Groceries",
+                        "color": "#22c55e",
+                        "icon": "shopping-cart",
+                        "amount": "500.00",
+                    },
+                    {
+                        "category_id": None,
+                        "name": "",
+                        "color": "#9ca3af",
+                        "icon": None,
+                        "amount": "300.00",
+                    },
+                ],
+            }
+        ],
+    }
+
+
+def tag_spending_payload() -> dict[str, Any]:
+    return {
+        "tag_id": 3,
+        "tag_name": "weekend",
+        "start_date": None,
+        "end_date": None,
+        "total_amount": "800.00",
+        "transaction_count": 5,
+        "average_per_month": "400.00",
+        "series": [{"year": 2026, "month": 11, "amount": "400.00"}],
+    }
+
+
+def insights_payload() -> dict[str, Any]:
+    # The API's own compact shape: key + machine params, no text.
+    # params mirrors insights_service exactly: count of idle accounts
+    # and the threshold days from settings — never an account id.
+    return {
+        "alerts": [
+            {"key": "idle_cash", "severity": "warning", "params": {"count": 2, "days": 75}}
+        ]
+    }
+
+
+def advice_payload() -> dict[str, Any]:
+    return {
+        "items": [
+            {
+                "key": "rising_category",
+                "tone": "warning",
+                "params": {"category": "Dining", "percent": 34.2},
+            }
+        ]
+    }
+
+
 async def test_write_names_registry_is_exact(
     mock_client_factory: Any,
 ) -> None:
@@ -799,6 +954,168 @@ async def test_delete_goal_path_and_204(mock_client_factory: Any) -> None:
     assert "204" in result
 
 
+async def test_dashboard_summary_pins_period_and_compacts_breakdown(
+    mock_client_factory: Any,
+) -> None:
+    client, calls = mock_client_factory(lambda request: httpx.Response(200, json=dashboard_payload()))
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["get_dashboard_summary"].ainvoke({"year": 2026, "month": 11})
+
+    # With params on the wire the full string carries the query —
+    # pin the path and the params separately.
+    assert calls[0].url.path == "/api/dashboard/summary"
+    assert calls[0].url.params["year"] == "2026"
+    assert calls[0].url.params["month"] == "11"
+    parsed = json.loads(result)
+    # color/icon dropped on both levels; the children rollup stays.
+    assert parsed["spending_by_category"] == [
+        {
+            "category_id": 4,
+            "name": "Groceries",
+            "amount": "612.30",
+            "percent": 19.6,
+            "children": [{"category_id": 5, "name": "Snacks", "amount": "112.30"}],
+        }
+    ]
+    assert parsed["net"] == "2079.55"
+
+
+async def test_dashboard_summary_omits_unset_period(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(lambda request: httpx.Response(200, json=dashboard_payload()))
+    bundle = build_tools(client)
+
+    await bundle_by_name(bundle)["get_dashboard_summary"].ainvoke({})
+
+    # No period travel: the backend defaults to the current month.
+    assert dict(calls[0].url.params) == {}
+
+
+async def test_cash_flow_passes_dates_and_body_as_is(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(lambda request: httpx.Response(200, json=cash_flow_payload()))
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["get_cash_flow"].ainvoke(
+        {"start_date": "2026-01-01", "end_date": "2026-11-30"}
+    )
+
+    assert calls[0].url.path == "/api/cash-flow"
+    assert calls[0].url.params["start_date"] == "2026-01-01"
+    assert calls[0].url.params["end_date"] == "2026-11-30"
+    # The response is already model-sized: no compaction layer.
+    assert json.loads(result) == cash_flow_payload()
+
+
+async def test_cash_flow_blank_dates_are_not_sent(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(lambda request: httpx.Response(200, json=cash_flow_payload()))
+    bundle = build_tools(client)
+
+    await bundle_by_name(bundle)["get_cash_flow"].ainvoke({"start_date": " ", "end_date": ""})
+
+    # A blank date is "not provided" — the same rule as search filters.
+    assert dict(calls[0].url.params) == {}
+
+
+async def test_category_spending_pins_category_and_compacts(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(
+        lambda request: httpx.Response(200, json=category_spending_payload())
+    )
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["get_category_spending"].ainvoke({"category_id": 4})
+
+    assert calls[0].url.path == "/api/reports/category-spending"
+    assert calls[0].url.params["category_id"] == "4"
+    # category_color/category_icon dropped; the series stays intact.
+    parsed = json.loads(result)
+    assert parsed["category_name"] == "Groceries"
+    assert "category_color" not in parsed
+    assert parsed["series"][0] == {"year": 2026, "month": 10, "amount": "306.15"}
+
+
+async def test_category_ranking_sends_kind_and_compacts_items(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(
+        lambda request: httpx.Response(200, json=category_ranking_payload())
+    )
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["get_category_ranking"].ainvoke({})
+
+    # kind defaults to 'expense' and travels explicitly.
+    assert calls[0].url.params["kind"] == "expense"
+    parsed = json.loads(result)
+    # An empty children list is dropped, not passed through as noise.
+    assert parsed["items"] == [
+        {
+            "category_id": 4,
+            "name": "Groceries",
+            "amount": "612.30",
+            "percent": 19.6,
+            "transaction_count": 14,
+        }
+    ]
+
+
+async def test_tag_ranking_keeps_totals_and_compacts_categories(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(lambda request: httpx.Response(200, json=tag_ranking_payload()))
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["get_tag_ranking"].ainvoke({"kind": "income"})
+
+    assert calls[0].url.params["kind"] == "income"
+    parsed = json.loads(result)
+    # tagged_amount stays: with total_amount it frames how much of the
+    # period the report actually covers.
+    assert parsed["tagged_amount"] == "1200.00"
+    assert parsed["items"] == [
+        {
+            "tag_id": 3,
+            "name": "weekend",
+            "amount": "800.00",
+            "percent": 25.6,
+            "transaction_count": 5,
+            "categories": [
+                {"category_id": 4, "name": "Groceries", "amount": "500.00"},
+                {"category_id": None, "name": "", "amount": "300.00"},
+            ],
+        }
+    ]
+
+
+async def test_tag_spending_pins_tag_and_kind(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(lambda request: httpx.Response(200, json=tag_spending_payload()))
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["get_tag_spending"].ainvoke({"tag_id": 3})
+
+    assert calls[0].url.path == "/api/reports/tag-spending"
+    assert calls[0].url.params["tag_id"] == "3"
+    # kind defaults to 'expense' and travels explicitly.
+    assert calls[0].url.params["kind"] == "expense"
+    assert json.loads(result)["tag_name"] == "weekend"
+
+
+async def test_insights_passes_alerts_through(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(lambda request: httpx.Response(200, json=insights_payload()))
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["get_insights"].ainvoke({})
+
+    assert str(calls[0].url) == "http://test.local/api/insights/alerts"
+    # key+params IS the payload — wording is the model's job.
+    assert json.loads(result) == insights_payload()
+
+
+async def test_advice_passes_items_through(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(lambda request: httpx.Response(200, json=advice_payload()))
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["get_advice"].ainvoke({})
+
+    assert str(calls[0].url) == "http://test.local/api/advice"
+    assert json.loads(result) == advice_payload()
+
+
 @pytest.mark.parametrize(
     ("tool_name", "is_write"),
     [
@@ -827,6 +1144,14 @@ async def test_delete_goal_path_and_204(mock_client_factory: Any) -> None:
         ("update_goal", True),
         ("delete_goal", True),
         ("add_goal_contribution", True),
+        ("get_dashboard_summary", False),
+        ("get_cash_flow", False),
+        ("get_category_spending", False),
+        ("get_category_ranking", False),
+        ("get_tag_ranking", False),
+        ("get_tag_spending", False),
+        ("get_insights", False),
+        ("get_advice", False),
     ],
 )
 async def test_every_tool_is_classified(

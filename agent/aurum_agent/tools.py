@@ -1,4 +1,4 @@
-"""LangChain tools over the Aurum REST API: accounts, categories, tags, transactions, budgets, goals, recurring, analytics.
+"""LangChain tools over the Aurum REST API: accounts, categories, tags, transactions, budgets, goals, recurring, analytics, financial advice.
 
 Each tool is a thin, typed wrapper around one endpoint: it compacts the
 response into model-friendly JSON, or turns an ``AurumApiError`` into a
@@ -6,6 +6,12 @@ plain-text error string the model can read and react to. The tools
 themselves know nothing about confirmations — that is the graph's job
 (see graph.py): any name in ``ToolBundle.write_names`` is routed through
 a terminal "yes" before its REST call is allowed to run.
+
+The consultant tools (net worth, budget suggestions, savings forecast)
+are read-only like the analytics ones, but two of them compute in
+Python over fetched data instead of passing one endpoint through: the
+averages and the month arithmetic are exact math the model must never
+redo by hand.
 
 Scope notes: transaction splits are deliberately not exposed, and
 neither is ``DELETE /tags/{id}`` — tags are only created and listed
@@ -18,6 +24,8 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import date, timedelta
+from decimal import ROUND_CEILING, Decimal
 from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool
@@ -42,6 +50,22 @@ PATH_TAG_RANKING = "/reports/tag-ranking"
 PATH_TAG_SPENDING = "/reports/tag-spending"
 PATH_INSIGHTS = "/insights/alerts"
 PATH_ADVICE = "/advice"
+# The consultant's capital view: cash from accounts plus every asset.
+PATH_NET_WORTH = "/net-worth/summary"
+
+# --- Financial advisor math (deterministic, never the model's job) ---
+# The resolution every money answer is quantized to.
+CENT = Decimal("0.01")
+# A suggested budget limit is the category's monthly average rounded UP
+# to this step — a limit below the average starts life over budget.
+LIMIT_STEP = Decimal("10")
+# The default history window for suggest_budgets' averaging.
+DEFAULT_LOOKBACK_MONTHS = 6
+# The hard cap on that window — averaging over years of old habits
+# would blur a recent lifestyle change into the suggestion.
+MAX_LOOKBACK_MONTHS = 24
+# The cash-flow window behind savings_forecast's use_average_net mode.
+AVERAGE_NET_WINDOW_MONTHS = 6
 
 
 @dataclass(frozen=True)
@@ -349,6 +373,95 @@ def _compact_recurring(payload: dict[str, Any]) -> dict[str, Any]:
         "is_due": payload.get("is_due"),
         "days_until_due": payload.get("days_until_due"),
     }
+
+
+def _compact_net_worth(payload: dict[str, Any]) -> dict[str, Any]:
+    """Net worth for the model's eyes: headline plus the three
+    breakdowns the page renders (asset class, capital role, risk
+    level).
+
+    The daily series is dropped on purpose: at "365d"/"all" it is
+    hundreds of points the model would never quote — the range's
+    change is already in change_amount/change_percent, and month-level
+    money trends are get_cash_flow's job, not capital's. color/icon
+    are UI-only, same as every other compaction.
+    """
+    return {
+        "range": payload.get("range"),
+        "current": payload.get("current"),
+        "change_amount": payload.get("change_amount"),
+        "change_percent": payload.get("change_percent"),
+        "breakdown": [
+            {
+                "key": item.get("key"),
+                "name": item.get("name"),
+                "amount": item.get("amount"),
+                "percent": item.get("percent"),
+            }
+            for item in payload.get("breakdown", [])
+        ],
+        "capital_roles": [
+            {
+                "role": item.get("role"),
+                "label": item.get("label"),
+                "total_value": item.get("total_value"),
+                "monthly_cash_flow": item.get("monthly_cash_flow"),
+                "count": item.get("count"),
+            }
+            for item in payload.get("capital_roles", [])
+        ],
+        "risk_levels": [
+            {
+                "risk_level": item.get("risk_level"),
+                "label": item.get("label"),
+                "total_value": item.get("total_value"),
+                "percent": item.get("percent"),
+                "items": [
+                    {
+                        "key": sub.get("key"),
+                        "name": sub.get("name"),
+                        "amount": sub.get("amount"),
+                        "percent": sub.get("percent"),
+                    }
+                    for sub in item.get("items", [])
+                ],
+            }
+            for item in payload.get("risk_levels", [])
+        ],
+    }
+
+
+def _full_month_range(months: int) -> tuple[date, date]:
+    """Inclusive bounds of the last ``months`` FULL calendar months.
+
+    The current month is always half-written (bills still landing, the
+    salary maybe not yet in), so the window ends with the previous
+    month's last day: a partial month averaged into a suggestion would
+    read as a frugality that doesn't exist yet.
+    """
+    today = date.today()
+    year, month = today.year, today.month
+    for _ in range(months):
+        year, month = (year - 1, 12) if month == 1 else (year, month - 1)
+    start = date(year, month, 1)
+    end = date(today.year, today.month, 1) - timedelta(days=1)
+    return start, end
+
+
+def _money(value: Decimal) -> str:
+    """Two-decimal string — the API's own money wire format."""
+    return str(value.quantize(CENT))
+
+
+def _ceil_to_step(value: Decimal, step: Decimal) -> Decimal:
+    """Round ``value`` UP to the next multiple of ``step`` (>= value)."""
+    return (value / step).quantize(Decimal("1"), rounding=ROUND_CEILING) * step
+
+
+def _add_months(year: int, month: int, months: int) -> tuple[int, int]:
+    """The calendar month ``months`` after (year, month) — month math only."""
+    total = year * 12 + (month - 1) + months
+    return total // 12, total % 12 + 1
 
 
 def _tool(func: Callable[..., Awaitable[str]], description: str) -> BaseTool:
@@ -1057,6 +1170,244 @@ def build_tools(client: AurumClient) -> ToolBundle:
     )
     async def get_advice() -> str:
         return await call("GET", PATH_ADVICE)
+
+    # --- Financial advisor (read-only, but two tools compute) ---
+
+    @registry.add(
+        "The user's total capital: net worth (cash from every account "
+        "plus all assets) with its change over the range, broken down "
+        "by asset class (breakdown), by capital role (capital_roles: "
+        "income / neutral / drain) and by risk level (risk_levels, "
+        "each with its holdings). range: '7d' | '30d' | '90d' | '180d' "
+        "| '365d' | 'all', default '30d'. THE call for 'what am I "
+        "worth' / 'how is my capital doing' questions; the daily "
+        "series is not included — for month-level income/expense "
+        "trends use get_cash_flow."
+    )
+    async def get_net_worth(range: str = "30d") -> str:
+        return await call(
+            "GET",
+            PATH_NET_WORTH,
+            params={"range": range},
+            compact=_compact_net_worth,
+        )
+
+    @registry.add(
+        "Budget suggestions from real history: per-category average "
+        "monthly spend over the last N FULL months (the current, "
+        "still-running month excluded), each with a proposed limit — "
+        "the average rounded UP to the nearest 10. items carry "
+        "category_id, name, total_amount, average_per_month, "
+        "suggested_limit, has_budget and current_limit (for an "
+        "update_budget comparison when a limit already exists). "
+        "months: 1-24, default 6. THE call for 'help me plan my "
+        "budget' / 'suggest limits' questions; applying the picks "
+        "afterwards is create_budget / update_budget with the usual "
+        "confirmation."
+    )
+    async def suggest_budgets(months: int = DEFAULT_LOOKBACK_MONTHS) -> str:
+        if not 1 <= months <= MAX_LOOKBACK_MONTHS:
+            return f"months must be between 1 and {MAX_LOOKBACK_MONTHS}."
+        start, end = _full_month_range(months)
+        # Two reads, fetched directly rather than via `call` (which
+        # would hand back a string to parse right back): the tool needs
+        # both payloads in Python to do the averaging itself.
+        try:
+            budgets = await client.request("GET", PATH_BUDGETS)
+            ranking = await client.request(
+                "GET",
+                PATH_CATEGORY_RANKING,
+                params={
+                    "kind": "expense",
+                    "start_date": start.isoformat(),
+                    "end_date": end.isoformat(),
+                },
+            )
+        except AurumApiError as error:
+            return f"API error (HTTP {error.status}): {error.detail}"
+        existing = {
+            item.get("category_id"): item.get("monthly_limit") for item in budgets or []
+        }
+        items: list[dict[str, Any]] = []
+        for rank in (ranking or {}).get("items", []):
+            total = Decimal(str(rank.get("amount") or 0))
+            # Zero spend has no average worth suggesting a limit from.
+            if total <= 0:
+                continue
+            average = total / months
+            category_id = rank.get("category_id")
+            items.append(
+                {
+                    "category_id": category_id,
+                    "name": rank.get("name"),
+                    "total_amount": _money(total),
+                    "average_per_month": _money(average),
+                    "suggested_limit": _money(_ceil_to_step(average, LIMIT_STEP)),
+                    "has_budget": category_id in existing,
+                    "current_limit": existing.get(category_id),
+                }
+            )
+        return _dumps(
+            {
+                "months": months,
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
+                "items": items,
+            }
+        )
+
+    @registry.add(
+        "Savings math, done exactly — never divide multi-month amounts "
+        "yourself. One target plus one contribution mode. Target: "
+        "either goal_id (an existing savings goal — its remaining "
+        "amount becomes the target) or target_amount (positive), never "
+        "both. Contribution: exactly one of monthly_contribution "
+        "(positive), target_date ('YYYY-MM-DD', a future month — the "
+        "required monthly amount comes back) or use_average_net=true "
+        "(the average of the real monthly net over the last 6 full "
+        "months, from cash flow). Answers {required_monthly, "
+        "months_available} for a target_date question, "
+        "{months_needed, reached_on 'YYYY-MM'} for a contribution "
+        "question. Simple arithmetic: no investment returns assumed."
+    )
+    async def savings_forecast(
+        target_amount: float | None = None,
+        monthly_contribution: float | None = None,
+        target_date: str | None = None,
+        goal_id: int | None = None,
+        use_average_net: bool = False,
+    ) -> str:
+        # A blank date is "not provided" — the same rule as the list
+        # filters; a model leaving the field empty must not hit the
+        # future-month guard below.
+        target_date = (target_date or "").strip() or None
+        # Target: goal_id (remaining of a real goal) XOR target_amount.
+        if (goal_id is None) == (target_amount is None):
+            return "Pass exactly one of goal_id or target_amount."
+        # Contribution mode: exactly one of the three.
+        if sum(
+            (
+                monthly_contribution is not None,
+                target_date is not None,
+                use_average_net,
+            )
+        ) != 1:
+            return (
+                "Pass exactly one of monthly_contribution, target_date "
+                "or use_average_net=true."
+            )
+        target: dict[str, Any]
+        if goal_id is not None:
+            try:
+                goals = await client.request("GET", PATH_GOALS)
+            except AurumApiError as error:
+                return f"API error (HTTP {error.status}): {error.detail}"
+            goal = next(
+                (item for item in goals or [] if item.get("id") == goal_id),
+                None,
+            )
+            if goal is None:
+                return f"No goal with id {goal_id}."
+            remaining = Decimal(str(goal.get("remaining") or 0))
+            if remaining <= 0:
+                return (
+                    f"Goal '{goal.get('name')}' is already reached — "
+                    "nothing to save for."
+                )
+            target = {
+                "goal": {
+                    "id": goal_id,
+                    "name": goal.get("name"),
+                    "remaining": _money(remaining),
+                }
+            }
+        else:
+            # Narrowed by the XOR guard above: target_amount is set.
+            if target_amount <= 0:
+                return "target_amount must be positive."
+            remaining = Decimal(str(target_amount))
+            target = {"target_amount": _money(remaining)}
+        today = date.today()
+        if target_date is not None:
+            try:
+                when = date.fromisoformat(target_date)
+            except ValueError:
+                return "target_date must be 'YYYY-MM-DD'."
+            # Calendar months between today and the deadline — a month
+            # is the unit the user budgets in, not 30-day chunks.
+            months_available = (when.year - today.year) * 12 + (when.month - today.month)
+            if months_available <= 0:
+                return "target_date must be in a future month."
+            # Rounded UP to the cent: a hair short would still miss.
+            required = (remaining / months_available).quantize(
+                CENT, rounding=ROUND_CEILING
+            )
+            return _dumps(
+                {
+                    **target,
+                    "target_date": when.isoformat(),
+                    "months_available": months_available,
+                    "required_monthly": _money(required),
+                }
+            )
+        if monthly_contribution is not None:
+            if monthly_contribution <= 0:
+                return "monthly_contribution must be positive."
+            contribution = Decimal(str(monthly_contribution))
+        else:
+            # use_average_net: ground the contribution in what the
+            # ledger actually clears per month, not a guess.
+            start, end = _full_month_range(AVERAGE_NET_WINDOW_MONTHS)
+            try:
+                flow = await client.request(
+                    "GET",
+                    PATH_CASH_FLOW,
+                    params={
+                        "start_date": start.isoformat(),
+                        "end_date": end.isoformat(),
+                    },
+                )
+            except AurumApiError as error:
+                return f"API error (HTTP {error.status}): {error.detail}"
+            points = (flow or {}).get("points", [])
+            if not points:
+                # Defensive against a backend shape change: today's
+                # bounded cash-flow zero-fills every month of the
+                # window, so a live instance answers with six points
+                # even when the ledger is empty — this branch only
+                # fires if that contract ever shifts.
+                return (
+                    "No transactions in the last "
+                    f"{AVERAGE_NET_WINDOW_MONTHS} full months — nothing to average."
+                )
+            # The window is whole calendar months, zeros included (a
+            # month with no activity is a real net of zero), so the
+            # point count IS the window length.
+            average_net = Decimal(str(flow.get("total_net") or 0)) / len(points)
+            if average_net <= 0:
+                return (
+                    "Average monthly net over the last "
+                    f"{len(points)} full months is {_money(average_net)} — "
+                    "at this rate nothing can be saved."
+                )
+            contribution = average_net
+            target["average_net_monthly"] = _money(average_net)
+            target["window_months"] = len(points)
+        # ceil: the last partial month is still a month of waiting.
+        months_needed = (remaining / contribution).quantize(
+            Decimal("1"), rounding=ROUND_CEILING
+        )
+        reached_year, reached_month = _add_months(
+            today.year, today.month, int(months_needed)
+        )
+        return _dumps(
+            {
+                **target,
+                "monthly_contribution": _money(contribution),
+                "months_needed": int(months_needed),
+                "reached_on": f"{reached_year:04d}-{reached_month:02d}",
+            }
+        )
 
     # --- Recurring transactions ---
 

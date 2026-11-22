@@ -2,7 +2,7 @@
 
 The terminal ``aurum-agent`` CLI and the web UI's Assistant page are two
 frontends over one brain: this service wraps the same compiled graph
-(``aurum_agent.graph``) with its 15 REST tools, duplicate warnings and the
+(``aurum_agent.graph``) with its 41 REST tools, duplicate warnings and the
 interrupt-based confirmation gate. The REPL reads y/n from a terminal;
 here the pending payload travels to the browser, the button decisions
 travel back as a list of per-call booleans, and the graph — the gate

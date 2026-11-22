@@ -32,6 +32,16 @@ const VIEW_KEY = "aurum:chat-view";
 // messages.
 const LOG_CAP = 100;
 
+// The consultant's conversation starters, shown only while the log is
+// empty: financial state, expense cuts, budget planning, savings
+// timeline — the four questions the agent's advisory tools answer.
+const PROMPT_CHIPS: TranslationKey[] = [
+  "assistant.prompt.state",
+  "assistant.prompt.optimize",
+  "assistant.prompt.budget",
+  "assistant.prompt.goal",
+];
+
 interface PersistedChatView {
   messages: UiMessage[];
   pending: ChatPendingCall[] | null;
@@ -254,11 +264,12 @@ export function AssistantPage() {
     }
   };
 
-  const handleSend = async () => {
-    const text = input.trim();
+  // One message out, whatever its source — typed input or a tapped
+  // starter chip. The mint-on-first-use and the failure paths belong
+  // to the send pipeline itself, so both sources share them.
+  const sendText = async (text: string) => {
     if (!text || busy || pending) return;
     setMessages((prev) => [...prev, { role: "user", text }]);
-    setInput("");
     // A first visit has no thread yet — mint one together with the
     // first message rather than on page load, so the status-only visit
     // costs nothing. busy is set for the mint too: a second send in
@@ -282,6 +293,13 @@ export function AssistantPage() {
       }
     }
     await runTurn(() => sendChatMessage(thread, text));
+  };
+
+  const handleSend = () => {
+    const text = input.trim();
+    if (!text || busy || pending) return;
+    setInput("");
+    void sendText(text);
   };
 
   const handleDecide = async (call: ChatPendingCall, approved: boolean) => {
@@ -369,6 +387,24 @@ export function AssistantPage() {
         {messages.length === 0 && !pending && (
           <div className="rounded-2xl border border-border bg-surface-1 px-4 py-6 text-center text-sm text-text-muted">
             {t("assistant.empty")}
+            {/* The starter chips ride inside the empty state: one tap
+                sends the localized question as the user's own message.
+                They vanish with the first bubble — discovery has served
+                its purpose, and a live conversation shouldn't be
+                upstaged by canned questions. */}
+            <div className="mt-4 flex flex-wrap justify-center gap-2">
+              {PROMPT_CHIPS.map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => void sendText(t(key))}
+                  disabled={busy}
+                  className="rounded-full border border-border bg-surface-0 px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-2 hover:text-text-primary disabled:opacity-50"
+                >
+                  {t(key)}
+                </button>
+              ))}
+            </div>
           </div>
         )}
         {messages.map((message, index) => (

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date, timedelta
 from typing import Any
 
 import httpx
@@ -284,6 +285,62 @@ def advice_payload() -> dict[str, Any]:
             }
         ]
     }
+
+
+def net_worth_payload() -> dict[str, Any]:
+    # series/colors/icons on purpose: compaction must drop the daily
+    # series and every UI-only field, keeping the three breakdowns.
+    return {
+        "range": "30d",
+        "current": "48250.00",
+        "change_amount": "1200.00",
+        "change_percent": 2.55,
+        "series": [{"date": "2026-10-24", "value": "47050.00"}],
+        "breakdown": [
+            {
+                "key": "cash",
+                "name": "Cash",
+                "color": "#38bdf8",
+                "icon": "wallet",
+                "amount": "5250.00",
+                "percent": 10.88,
+            }
+        ],
+        "capital_roles": [
+            {
+                "role": "income",
+                "label": "Income",
+                "color": "#22c55e",
+                "total_value": "25000.00",
+                "monthly_cash_flow": "0.00",
+                "count": 1,
+            }
+        ],
+        "risk_levels": [
+            {
+                "risk_level": "low",
+                "label": "Low",
+                "color": "#94a3b8",
+                "total_value": "5250.00",
+                "percent": 10.88,
+                "items": [
+                    {"key": "cash", "name": "Cash", "amount": "5250.00", "percent": 100.0}
+                ],
+            }
+        ],
+    }
+
+
+def expected_full_month_window(months: int) -> tuple[str, str]:
+    """The bounds suggest_budgets must average over, recomputed here on
+    purpose: the test states the calendar semantics (full months only,
+    ending with the previous one) instead of mirroring the helper."""
+    today = date.today()
+    end = date(today.year, today.month, 1) - timedelta(days=1)
+    year, month = today.year, today.month
+    for _ in range(months):
+        year, month = (year - 1, 12) if month == 1 else (year, month - 1)
+    return date(year, month, 1).isoformat(), end.isoformat()
 
 
 def recurring_payload() -> list[dict[str, Any]]:
@@ -1150,6 +1207,461 @@ async def test_advice_passes_items_through(mock_client_factory: Any) -> None:
     assert json.loads(result) == advice_payload()
 
 
+async def test_net_worth_passes_range_and_compacts(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(
+        lambda request: httpx.Response(200, json=net_worth_payload())
+    )
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["get_net_worth"].ainvoke({"range": "90d"})
+
+    assert calls[0].url.path == "/api/net-worth/summary"
+    assert calls[0].url.params["range"] == "90d"
+    parsed = json.loads(result)
+    # The headline and the three breakdowns survive; the daily series
+    # and every color/icon do not.
+    assert parsed["current"] == "48250.00"
+    assert parsed["change_amount"] == "1200.00"
+    assert parsed["breakdown"] == [
+        {"key": "cash", "name": "Cash", "amount": "5250.00", "percent": 10.88}
+    ]
+    assert parsed["capital_roles"] == [
+        {
+            "role": "income",
+            "label": "Income",
+            "total_value": "25000.00",
+            "monthly_cash_flow": "0.00",
+            "count": 1,
+        }
+    ]
+    assert parsed["risk_levels"] == [
+        {
+            "risk_level": "low",
+            "label": "Low",
+            "total_value": "5250.00",
+            "percent": 10.88,
+            "items": [
+                {"key": "cash", "name": "Cash", "amount": "5250.00", "percent": 100.0}
+            ],
+        }
+    ]
+    assert "series" not in parsed
+
+
+async def test_net_worth_defaults_to_30d(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(
+        lambda request: httpx.Response(200, json=net_worth_payload())
+    )
+    bundle = build_tools(client)
+
+    await bundle_by_name(bundle)["get_net_worth"].ainvoke({})
+
+    assert calls[0].url.params["range"] == "30d"
+
+
+async def test_suggest_budgets_averages_and_marks_existing(
+    mock_client_factory: Any,
+) -> None:
+    ranking = {
+        "start_date": None,
+        "end_date": None,
+        "total_amount": "4273.80",
+        "items": [
+            {
+                "category_id": 4,
+                "name": "Groceries",
+                "color": "#22c55e",
+                "icon": "shopping-cart",
+                "amount": "3673.80",
+                "percent": 85.97,
+                "transaction_count": 84,
+                "children": [],
+            },
+            {
+                "category_id": 7,
+                "name": "Dining",
+                "color": "#f97316",
+                "icon": "utensils",
+                "amount": "600.00",
+                "percent": 14.03,
+                "transaction_count": 21,
+                "children": [],
+            },
+        ],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/budgets":
+            return httpx.Response(200, json=budget_payload())
+        return httpx.Response(200, json=ranking)
+
+    client, calls = mock_client_factory(handler)
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["suggest_budgets"].ainvoke({"months": 6})
+
+    # Two reads: the limits first, then the ranking bounded to the window.
+    assert [call.url.path for call in calls] == [
+        "/api/budgets",
+        "/api/reports/category-ranking",
+    ]
+    ranking_params = calls[1].url.params
+    assert ranking_params["kind"] == "expense"
+    assert ranking_params["start_date"] == expected_full_month_window(6)[0]
+    assert ranking_params["end_date"] == expected_full_month_window(6)[1]
+    parsed = json.loads(result)
+    assert parsed["months"] == 6
+    # 3673.80 / 6 = 612.30, rounded up to the next 10 → 620; the
+    # existing 500 limit rides along for an update_budget comparison.
+    assert parsed["items"][0] == {
+        "category_id": 4,
+        "name": "Groceries",
+        "total_amount": "3673.80",
+        "average_per_month": "612.30",
+        "suggested_limit": "620.00",
+        "has_budget": True,
+        "current_limit": "500.00",
+    }
+    # 600.00 / 6 = 100 exactly — the step rounding must not inflate it.
+    assert parsed["items"][1] == {
+        "category_id": 7,
+        "name": "Dining",
+        "total_amount": "600.00",
+        "average_per_month": "100.00",
+        "suggested_limit": "100.00",
+        "has_budget": False,
+        "current_limit": None,
+    }
+
+
+async def test_suggest_budgets_skips_zero_spending(mock_client_factory: Any) -> None:
+    ranking = {
+        "start_date": None,
+        "end_date": None,
+        "total_amount": "0.00",
+        "items": [
+            {
+                "category_id": 4,
+                "name": "Groceries",
+                "color": "#22c55e",
+                "icon": "shopping-cart",
+                "amount": "0.00",
+                "percent": 0.0,
+                "transaction_count": 0,
+                "children": [],
+            }
+        ],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/budgets":
+            return httpx.Response(200, json=[])
+        return httpx.Response(200, json=ranking)
+
+    client, _ = mock_client_factory(handler)
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["suggest_budgets"].ainvoke({})
+
+    # Zero spend has no average worth suggesting a limit from.
+    assert json.loads(result)["items"] == []
+
+
+async def test_suggest_budgets_rejects_out_of_range_months(
+    mock_client_factory: Any,
+) -> None:
+    client, calls = mock_client_factory(lambda request: httpx.Response(200, json=[]))
+    bundle = build_tools(client)
+
+    for months in (0, -1, 25):
+        result = await bundle_by_name(bundle)["suggest_budgets"].ainvoke({"months": months})
+        assert result == "months must be between 1 and 24."
+
+    # The guard fires before any request travels.
+    assert calls == []
+
+
+async def test_suggest_budgets_error_becomes_tool_text(mock_client_factory: Any) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"detail": "boom"})
+
+    client, _ = mock_client_factory(handler)
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["suggest_budgets"].ainvoke({})
+
+    # This tool fetches via client.request directly, so its own except
+    # must produce the same model-facing text shape as `call`'s.
+    assert "API error (HTTP 500)" in result
+    assert "boom" in result
+
+
+async def test_savings_forecast_amount_and_contribution(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(lambda request: httpx.Response(200, json=[]))
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["savings_forecast"].ainvoke(
+        {"target_amount": 6750.0, "monthly_contribution": 500.0}
+    )
+
+    # Pure calculator: no API behind this shape.
+    assert calls == []
+    parsed = json.loads(result)
+    assert parsed["target_amount"] == "6750.00"
+    assert parsed["monthly_contribution"] == "500.00"
+    # 6750 / 500 = 13.5 — the half month still has to be waited out.
+    assert parsed["months_needed"] == 14
+    today = date.today()
+    total = today.year * 12 + (today.month - 1) + 14
+    assert parsed["reached_on"] == f"{total // 12:04d}-{total % 12 + 1:02d}"
+
+
+async def test_savings_forecast_amount_and_target_date(mock_client_factory: Any) -> None:
+    client, _ = mock_client_factory(lambda request: httpx.Response(200, json=[]))
+    bundle = build_tools(client)
+
+    today = date.today()
+    due = date(today.year + 1, today.month, 1)  # exactly 12 months out
+    result = await bundle_by_name(bundle)["savings_forecast"].ainvoke(
+        {"target_amount": 1200.0, "target_date": due.isoformat()}
+    )
+
+    parsed = json.loads(result)
+    assert parsed["months_available"] == 12
+    # 1200 / 12 = 100 exactly — the cent ceiling must not inflate it.
+    assert parsed["required_monthly"] == "100.00"
+
+
+async def test_savings_forecast_ceils_required_monthly_to_cent(
+    mock_client_factory: Any,
+) -> None:
+    client, _ = mock_client_factory(lambda request: httpx.Response(200, json=[]))
+    bundle = build_tools(client)
+
+    today = date.today()
+    total = today.year * 12 + (today.month - 1) + 3
+    due = date(total // 12, total % 12 + 1, 1)  # 3 months out
+    result = await bundle_by_name(bundle)["savings_forecast"].ainvoke(
+        {"target_amount": 100.0, "target_date": due.isoformat()}
+    )
+
+    # 100 / 3 = 33.33… — a cent short would miss the target, so up.
+    assert json.loads(result)["required_monthly"] == "33.34"
+
+
+async def test_savings_forecast_goal_uses_remaining(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(lambda request: httpx.Response(200, json=goal_payload()))
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["savings_forecast"].ainvoke(
+        {"goal_id": 1, "monthly_contribution": 500.0}
+    )
+
+    assert str(calls[0].url) == "http://test.local/api/goals"
+    parsed = json.loads(result)
+    # The goal's remaining (10000 - 3250) is the target, not its full
+    # amount — the log already holds the 3250.
+    assert parsed["goal"] == {"id": 1, "name": "Emergency fund", "remaining": "6750.00"}
+    assert parsed["months_needed"] == 14
+
+
+async def test_savings_forecast_reached_goal_says_so(mock_client_factory: Any) -> None:
+    reached = [
+        dict(goal_payload()[0], current_amount="10000.00", remaining="0.00", is_reached=True)
+    ]
+    client, _ = mock_client_factory(lambda request: httpx.Response(200, json=reached))
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["savings_forecast"].ainvoke(
+        {"goal_id": 1, "monthly_contribution": 500.0}
+    )
+
+    assert "already reached" in result
+
+
+async def test_savings_forecast_unknown_goal(mock_client_factory: Any) -> None:
+    client, _ = mock_client_factory(lambda request: httpx.Response(200, json=[]))
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["savings_forecast"].ainvoke(
+        {"goal_id": 99, "monthly_contribution": 500.0}
+    )
+
+    assert result == "No goal with id 99."
+
+
+async def test_savings_forecast_requires_one_target(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(lambda request: httpx.Response(200, json=[]))
+    bundle = build_tools(client)
+
+    neither = await bundle_by_name(bundle)["savings_forecast"].ainvoke(
+        {"monthly_contribution": 500.0}
+    )
+    both = await bundle_by_name(bundle)["savings_forecast"].ainvoke(
+        {"goal_id": 1, "target_amount": 1000.0, "monthly_contribution": 500.0}
+    )
+
+    assert neither == both == "Pass exactly one of goal_id or target_amount."
+    assert calls == []
+
+
+async def test_savings_forecast_requires_one_contribution_mode(
+    mock_client_factory: Any,
+) -> None:
+    client, _ = mock_client_factory(lambda request: httpx.Response(200, json=[]))
+    bundle = build_tools(client)
+
+    none_given = await bundle_by_name(bundle)["savings_forecast"].ainvoke(
+        {"target_amount": 1000.0}
+    )
+    two_given = await bundle_by_name(bundle)["savings_forecast"].ainvoke(
+        {"target_amount": 1000.0, "monthly_contribution": 5.0, "use_average_net": True}
+    )
+
+    assert none_given == two_given == (
+        "Pass exactly one of monthly_contribution, target_date or use_average_net=true."
+    )
+
+
+async def test_savings_forecast_blank_target_date_is_unset(mock_client_factory: Any) -> None:
+    # "" or whitespace is "not provided" — the same blank rule as the
+    # list filters; it must not hit the future-month guard as a date.
+    client, calls = mock_client_factory(lambda request: httpx.Response(200, json=[]))
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["savings_forecast"].ainvoke(
+        {"target_amount": 1000.0, "monthly_contribution": 250.0, "target_date": "  "}
+    )
+
+    assert calls == []  # contribution mode: no request needed
+    assert json.loads(result)["months_needed"] == 4
+
+
+async def test_savings_forecast_rejects_nonpositive_inputs(
+    mock_client_factory: Any,
+) -> None:
+    client, _ = mock_client_factory(lambda request: httpx.Response(200, json=[]))
+    bundle = build_tools(client)
+
+    zero = await bundle_by_name(bundle)["savings_forecast"].ainvoke(
+        {"target_amount": 1000.0, "monthly_contribution": 0.0}
+    )
+    negative = await bundle_by_name(bundle)["savings_forecast"].ainvoke(
+        {"target_amount": -5.0, "monthly_contribution": 10.0}
+    )
+
+    assert zero == "monthly_contribution must be positive."
+    assert negative == "target_amount must be positive."
+
+
+async def test_savings_forecast_target_date_validation(mock_client_factory: Any) -> None:
+    client, _ = mock_client_factory(lambda request: httpx.Response(200, json=[]))
+    bundle = build_tools(client)
+
+    today = date.today()
+    past = await bundle_by_name(bundle)["savings_forecast"].ainvoke(
+        {"target_amount": 1000.0, "target_date": today.isoformat()}
+    )
+    malformed = await bundle_by_name(bundle)["savings_forecast"].ainvoke(
+        {"target_amount": 1000.0, "target_date": "next month"}
+    )
+
+    # The current month is still being written — it is not available.
+    assert past == "target_date must be in a future month."
+    assert malformed == "target_date must be 'YYYY-MM-DD'."
+
+
+async def test_savings_forecast_average_net_grounding(mock_client_factory: Any) -> None:
+    flow = {
+        "start_date": None,
+        "end_date": None,
+        "points": [
+            {"year": 2026, "month": month, "income": "4000.00", "expense": "3700.00", "net": "300.00"}
+            for month in range(5, 11)
+        ],
+        "total_income": "24000.00",
+        "total_expense": "22200.00",
+        "total_net": "1800.00",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/goals":
+            return httpx.Response(200, json=goal_payload())
+        return httpx.Response(200, json=flow)
+
+    client, calls = mock_client_factory(handler)
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["savings_forecast"].ainvoke(
+        {"goal_id": 1, "use_average_net": True}
+    )
+
+    # The grounding window is the last 6 full months — same bounds as
+    # suggest_budgets, and the cash-flow call is bounded by them.
+    assert calls[1].url.path == "/api/cash-flow"
+    assert calls[1].url.params["start_date"] == expected_full_month_window(6)[0]
+    assert calls[1].url.params["end_date"] == expected_full_month_window(6)[1]
+    parsed = json.loads(result)
+    # 1800 over 6 points → 300/month; 6750 at 300 → 22.5 → 23 months.
+    assert parsed["average_net_monthly"] == "300.00"
+    assert parsed["window_months"] == 6
+    assert parsed["monthly_contribution"] == "300.00"
+    assert parsed["months_needed"] == 23
+
+
+async def test_savings_forecast_negative_average_net(mock_client_factory: Any) -> None:
+    flow = {
+        "start_date": None,
+        "end_date": None,
+        "points": [
+            {"year": 2026, "month": month, "income": "3000.00", "expense": "3100.00", "net": "-100.00"}
+            for month in range(5, 11)
+        ],
+        "total_income": "18000.00",
+        "total_expense": "18600.00",
+        "total_net": "-600.00",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/goals":
+            return httpx.Response(200, json=goal_payload())
+        return httpx.Response(200, json=flow)
+
+    client, _ = mock_client_factory(handler)
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["savings_forecast"].ainvoke(
+        {"goal_id": 1, "use_average_net": True}
+    )
+
+    # Spending above income is a situation to report, not a negative
+    # months figure to compute with.
+    assert "nothing can be saved" in result
+    assert "-100.00" in result
+
+
+async def test_savings_forecast_no_history_for_average(mock_client_factory: Any) -> None:
+    # A shape today's bounded cash-flow cannot produce (zero-filled
+    # months always come back as points) — the test pins the
+    # defensive branch for the day that contract shifts.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/goals":
+            return httpx.Response(200, json=goal_payload())
+        return httpx.Response(
+            200,
+            json={"points": [], "total_income": "0.00", "total_expense": "0.00", "total_net": "0.00"},
+        )
+
+    client, _ = mock_client_factory(handler)
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["savings_forecast"].ainvoke(
+        {"goal_id": 1, "use_average_net": True}
+    )
+
+    assert "nothing to average" in result
+
+
 async def test_list_recurring_compacts_to_model_fields(mock_client_factory: Any) -> None:
     client, calls = mock_client_factory(lambda request: httpx.Response(200, json=recurring_payload()))
     bundle = build_tools(client)
@@ -1308,6 +1820,9 @@ async def test_post_recurring_path_returns_advanced_template(mock_client_factory
         ("get_tag_spending", False),
         ("get_insights", False),
         ("get_advice", False),
+        ("get_net_worth", False),
+        ("suggest_budgets", False),
+        ("savings_forecast", False),
         ("list_recurring", False),
         ("create_recurring", True),
         ("update_recurring", True),

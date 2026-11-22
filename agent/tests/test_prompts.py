@@ -51,3 +51,16 @@ def test_prompt_pins_recurring_rules() -> None:
     assert "no scheduler" in prompt
     assert "dated today" in prompt
     assert "is_active=false" in prompt
+
+
+def test_prompt_pins_advisor_rules() -> None:
+    prompt = build_system_prompt(today="2026-11-21", currency="USD")
+
+    # The consultant contract: state answers are assembled from real
+    # calls, budget and savings math runs through the deterministic
+    # tools, and optimization advice never invents its numbers.
+    assert "assembled, not guessed" in prompt
+    assert "get_net_worth" in prompt
+    assert "suggest_budgets" in prompt
+    assert "savings_forecast" in prompt
+    assert "no investment advice" in prompt

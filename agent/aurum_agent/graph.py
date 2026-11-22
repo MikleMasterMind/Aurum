@@ -10,9 +10,11 @@ until the model answers without tool calls::
 Preparation and confirmation are separate nodes on purpose: a resumed
 interrupt re-executes its node from the top, so any work placed above
 ``interrupt()`` would run twice. ``prepare`` builds the preview payload
+``prepare`` builds the preview payload
 (enriched with resolved id-to-name labels and likely duplicates for
-create_transaction) and COMPLETES — its result is checkpointed once.
-``confirm`` does nothing before
+create_transaction and post_recurring) and COMPLETES — its result is
+checkpointed once. ``confirm`` does nothing before
+``interrupt()`` except read that result, so a resume costs one state
 ``interrupt()`` except read that result, so a resume costs one state
 read and zero API calls. The REPL renders the payload, the user
 answers, and the decision comes back as a per-call list of booleans.
@@ -55,6 +57,7 @@ DECLINED_TOOL_RESULT = (
 PENDING_KEY = "calls"
 
 
+
 def final_reply(result: dict[str, Any]) -> str:
     """The user-facing text of a finished turn, ``""`` when there is none.
 
@@ -74,8 +77,9 @@ def final_reply(result: dict[str, Any]) -> str:
         )
     return content.strip()
 
-# Async callable returning likely duplicates for a transaction about
-# to be created; bound to the API client by the caller (see main).
+# Async callables returning likely duplicates for a write about to
+# happen — a transaction creation, or the transaction a recurring
+# post would create; bound to the API client by the caller (see main).
 DuplicateChecker = Callable[..., Awaitable[list[dict[str, Any]]]]
 
 # Async callable resolving the id arguments of a pending batch into
@@ -104,18 +108,21 @@ def build_agent_graph(
     *,
     system_prompt: str,
     duplicate_checker: DuplicateChecker,
+    recurring_duplicate_checker: DuplicateChecker,
     name_resolver: NameResolver,
     checkpointer: BaseCheckpointSaver,
 ) -> Any:
     """Assemble the compiled graph from the injected dependencies.
 
-    ``duplicate_checker`` is ``find_duplicates`` bound to the API client
-    (or a stub in tests) — the graph itself stays network-light. The
-    same for ``name_resolver``: ``find_names`` bound to the client,
-    turning the id arguments of the pending batch into display names
-    for the preview (see naming.py). The checkpointer is required, not
-    optional: ``interrupt()`` cannot freeze and resume a confirmation
-    without one.
+    ``duplicate_checker`` is ``find_duplicates`` bound to the API
+    client (or a stub in tests); ``recurring_duplicate_checker`` is
+    ``find_duplicates_for_recurring`` on the same client, backing the
+    post_recurring preview. The same pattern for ``name_resolver``:
+    ``find_names`` bound to the client, turning the id arguments of
+    the pending batch into display names for the preview (see
+    naming.py). The graph itself stays network-light. The checkpointer
+    is required, not optional: ``interrupt()`` cannot freeze and
+    resume a confirmation without one.
     """
     bound_model = model.bind_tools(bundle.tools)
     tools_by_name = {tool.name: tool for tool in bundle.tools}
@@ -159,6 +166,14 @@ def build_agent_graph(
                     date=call["args"].get("date"),
                     amount=call["args"].get("amount"),
                     description=call["args"].get("description"),
+                )
+            elif call["name"] == "post_recurring":
+                # Same advisory rule: posting creates a transaction
+                # dated today, so the template's amount and
+                # description are matched against today — the check
+                # itself fetches the template and degrades to [].
+                entry["duplicates"] = await recurring_duplicate_checker(
+                    recurring_id=call["args"].get("recurring_id"),
                 )
             pending.append(entry)
         return {"pending_calls": pending}

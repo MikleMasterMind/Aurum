@@ -35,7 +35,7 @@ from langgraph.types import Command
 
 from aurum_agent.api_client import SETTINGS_PATH, AurumApiError, AurumClient
 from aurum_agent.config import DEFAULT_LLM_BASE_URL, DEFAULT_LLM_MODEL, AgentConfig
-from aurum_agent.dedup import find_duplicates
+from aurum_agent.dedup import find_duplicates, find_duplicates_for_recurring
 from aurum_agent.graph import PENDING_KEY, build_agent_graph, final_reply
 from aurum_agent.naming import find_names
 from aurum_agent.prompts import build_system_prompt
@@ -187,11 +187,12 @@ class AgentChatService:
             self._model,
             self._bundle,
             system_prompt=build_system_prompt(today=today, currency=currency),
-            # The duplicate check and the id-to-name resolution ride the
-            # same client and inherit its "degrade, never block"
+            # The duplicate checks and the id-to-name resolution ride
+            # the same client and inherit its "degrade, never block"
             # failure behavior — a failing lookup only costs the card
             # its friendly labels, never the confirmation itself.
             duplicate_checker=partial(find_duplicates, self._client),
+            recurring_duplicate_checker=partial(find_duplicates_for_recurring, self._client),
             name_resolver=partial(find_names, self._client),
             checkpointer=self._checkpointer,
         )

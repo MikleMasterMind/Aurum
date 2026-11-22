@@ -1,4 +1,4 @@
-"""LangChain tools over the Aurum REST API: accounts, categories, tags.
+"""LangChain tools over the Aurum REST API: accounts, categories, tags, transactions, budgets, goals, recurring, analytics.
 
 Each tool is a thin, typed wrapper around one endpoint: it compacts the
 response into model-friendly JSON, or turns an ``AurumApiError`` into a
@@ -7,10 +7,10 @@ themselves know nothing about confirmations — that is the graph's job
 (see graph.py): any name in ``ToolBundle.write_names`` is routed through
 a terminal "yes" before its REST call is allowed to run.
 
-Scope notes: transaction splits are deliberately not exposed in this
-MVP, and neither is ``DELETE /tags/{id}`` — tags are only created and
-listed here, because the block-1 agent helps tag transactions, not
-manage the tag dictionary itself.
+Scope notes: transaction splits are deliberately not exposed, and
+neither is ``DELETE /tags/{id}`` — tags are only created and listed
+here, because the agent helps tag transactions, not manage the tag
+dictionary itself.
 """
 
 from __future__ import annotations
@@ -30,6 +30,18 @@ PATH_ACCOUNTS = "/accounts"
 PATH_CATEGORIES = "/categories"
 PATH_TAGS = "/tags"
 PATH_TRANSACTIONS = "/transactions"
+PATH_BUDGETS = "/budgets"
+PATH_GOALS = "/goals"
+PATH_RECURRING = "/recurring"
+# Read-only aggregations behind the UI's charts.
+PATH_DASHBOARD = "/dashboard/summary"
+PATH_CASH_FLOW = "/cash-flow"
+PATH_CATEGORY_SPENDING = "/reports/category-spending"
+PATH_CATEGORY_RANKING = "/reports/category-ranking"
+PATH_TAG_RANKING = "/reports/tag-ranking"
+PATH_TAG_SPENDING = "/reports/tag-spending"
+PATH_INSIGHTS = "/insights/alerts"
+PATH_ADVICE = "/advice"
 
 
 @dataclass(frozen=True)
@@ -57,6 +69,19 @@ def _omit_none(**fields: Any) -> dict[str, Any]:
     archived account), so only ``None`` is dropped.
     """
     return {name: value for name, value in fields.items() if value is not None}
+
+
+def _params_without_blanks(params: dict[str, Any]) -> dict[str, Any]:
+    """Drop blank string filters — the backend would 422 on them.
+
+    A model-issued "" or whitespace-only value (usually a date the
+    model left empty) is "not provided", not a filter to send.
+    """
+    return {
+        name: value
+        for name, value in params.items()
+        if not (isinstance(value, str) and not value.strip())
+    }
 
 
 def _make_caller(client: AurumClient) -> Callable[..., Awaitable[str]]:
@@ -156,6 +181,176 @@ def _compact_transaction(transaction: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _compact_budget(budget: dict[str, Any]) -> dict[str, Any]:
+    """Fields the model needs to discuss a budget; color/icon are UI-only."""
+    return {
+        "id": budget.get("id"),
+        "category_id": budget.get("category_id"),
+        "category_name": budget.get("category_name"),
+        "monthly_limit": budget.get("monthly_limit"),
+    }
+
+
+def _compact_budget_status_item(item: dict[str, Any]) -> dict[str, Any]:
+    """One budget-vs-actual row without the UI-only color/icon fields."""
+    return {
+        "budget_id": item.get("budget_id"),
+        "category_id": item.get("category_id"),
+        "category_name": item.get("category_name"),
+        "monthly_limit": item.get("monthly_limit"),
+        "spent": item.get("spent"),
+        "remaining": item.get("remaining"),
+        "percent": item.get("percent"),
+        "is_over_budget": item.get("is_over_budget"),
+    }
+
+
+def _compact_category_slice(item: dict[str, Any]) -> dict[str, Any]:
+    """One category's share of a dashboard/ranking payload.
+
+    color/icon are UI-only. children ride along only when the slice's
+    spend came from more than one distinct category (subcategory
+    rollup) — that is where a parent's number actually comes from.
+    """
+    compact: dict[str, Any] = {
+        "category_id": item.get("category_id"),
+        "name": item.get("name"),
+        "amount": item.get("amount"),
+        "percent": item.get("percent"),
+    }
+    if "transaction_count" in item:
+        # Dashboard slices don't carry it, ranking items do — never
+        # invent a null where the source had nothing to say.
+        compact["transaction_count"] = item.get("transaction_count")
+    children = item.get("children") or []
+    if children:
+        compact["children"] = [
+            {
+                "category_id": child.get("category_id"),
+                "name": child.get("name"),
+                "amount": child.get("amount"),
+            }
+            for child in children
+        ]
+    return compact
+
+
+def _compact_dashboard_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    """A month's headline numbers; slices via ``_compact_category_slice``."""
+    return {
+        "year": payload.get("year"),
+        "month": payload.get("month"),
+        "real_income": payload.get("real_income"),
+        "spent": payload.get("spent"),
+        "net": payload.get("net"),
+        "transferred_out": payload.get("transferred_out"),
+        "spending_by_category": [
+            _compact_category_slice(item) for item in payload.get("spending_by_category", [])
+        ],
+    }
+
+
+def _compact_category_spending(payload: dict[str, Any]) -> dict[str, Any]:
+    """One category's spend-over-time report; color/icon are UI-only."""
+    return {
+        "category_id": payload.get("category_id"),
+        "category_name": payload.get("category_name"),
+        "start_date": payload.get("start_date"),
+        "end_date": payload.get("end_date"),
+        "total_amount": payload.get("total_amount"),
+        "transaction_count": payload.get("transaction_count"),
+        "average_per_month": payload.get("average_per_month"),
+        "series": payload.get("series", []),
+    }
+
+
+def _compact_category_ranking(payload: dict[str, Any]) -> dict[str, Any]:
+    """All categories ranked by period spend; items via ``_compact_category_slice``."""
+    return {
+        "start_date": payload.get("start_date"),
+        "end_date": payload.get("end_date"),
+        "total_amount": payload.get("total_amount"),
+        "items": [_compact_category_slice(item) for item in payload.get("items", [])],
+    }
+
+
+def _compact_tag_ranking_item(item: dict[str, Any]) -> dict[str, Any]:
+    """One tag's ranked total with its per-category breakdown."""
+    return {
+        "tag_id": item.get("tag_id"),
+        "name": item.get("name"),
+        "amount": item.get("amount"),
+        "percent": item.get("percent"),
+        "transaction_count": item.get("transaction_count"),
+        "categories": [
+            {
+                "category_id": category.get("category_id"),
+                "name": category.get("name"),
+                "amount": category.get("amount"),
+            }
+            for category in item.get("categories", [])
+        ],
+    }
+
+
+def _compact_tag_ranking(payload: dict[str, Any]) -> dict[str, Any]:
+    """Tags ranked by period spend; ``tagged_amount`` stays — with
+    ``total_amount`` it says how much of the period the report covers."""
+    return {
+        "start_date": payload.get("start_date"),
+        "end_date": payload.get("end_date"),
+        "total_amount": payload.get("total_amount"),
+        "tagged_amount": payload.get("tagged_amount"),
+        "items": [_compact_tag_ranking_item(item) for item in payload.get("items", [])],
+    }
+
+
+def _compact_tag_spending(payload: dict[str, Any]) -> dict[str, Any]:
+    """One tag's spend-over-time report — the tag-side twin of
+    ``_compact_category_spending``, same shape with tag fields."""
+    return {
+        "tag_id": payload.get("tag_id"),
+        "tag_name": payload.get("tag_name"),
+        "start_date": payload.get("start_date"),
+        "end_date": payload.get("end_date"),
+        "total_amount": payload.get("total_amount"),
+        "transaction_count": payload.get("transaction_count"),
+        "average_per_month": payload.get("average_per_month"),
+        "series": payload.get("series", []),
+    }
+
+
+def _compact_recurring(payload: dict[str, Any]) -> dict[str, Any]:
+    """Fields the model needs to discuss a recurring template.
+
+    The computed schedule fields (next_due_date, is_due,
+    days_until_due) are the point of the listing; color/icon are
+    UI-only. Denormalized names ride along so the model can speak
+    human language without extra lookups.
+    """
+    return {
+        "id": payload.get("id"),
+        "account_id": payload.get("account_id"),
+        "account_name": payload.get("account_name"),
+        "category_id": payload.get("category_id"),
+        "category_name": payload.get("category_name"),
+        "transfer_account_id": payload.get("transfer_account_id"),
+        "transfer_account_name": payload.get("transfer_account_name"),
+        "type": payload.get("type"),
+        "amount": payload.get("amount"),
+        "description": payload.get("description"),
+        "merchant": payload.get("merchant"),
+        "notes": payload.get("notes"),
+        "frequency": payload.get("frequency"),
+        "anchor_date": payload.get("anchor_date"),
+        "last_posted_date": payload.get("last_posted_date"),
+        "is_active": payload.get("is_active"),
+        "next_due_date": payload.get("next_due_date"),
+        "is_due": payload.get("is_due"),
+        "days_until_due": payload.get("days_until_due"),
+    }
+
+
 def _tool(func: Callable[..., Awaitable[str]], description: str) -> BaseTool:
     """Wrap a typed async function into a LangChain tool.
 
@@ -171,9 +366,10 @@ def _tool(func: Callable[..., Awaitable[str]], description: str) -> BaseTool:
 class _Registry:
     """Tool registration with an explicit read/write class per tool.
 
-    Every tool is declared through ``@registry.add(..., is_write=...)`` —
-    reads carry the explicit default too — so the confirmation split is
-    visible at each definition instead of being implied by an absent
+    Every tool is declared through ``@registry.add(...)`` — writes
+    with ``is_write=True``, reads keeping the decorator's explicit
+    ``is_write=False`` default — so the confirmation split is visible
+    at each definition instead of being implied by an absent
     ``writes.add`` line somewhere above it.
     """
 
@@ -439,13 +635,9 @@ def build_tools(client: AurumClient) -> ToolBundle:
             page=page,
             page_size=page_size,
         )
-        # A blank string filter ("" or whitespace-only) would sail to
-        # the backend and fail validation — treat it as "not provided".
-        params = {
-            name: value
-            for name, value in params.items()
-            if not (isinstance(value, str) and not value.strip())
-        }
+        # Same blank-filter rule as the analytics tools: an empty
+        # string is "not provided", not a doomed 422 round trip.
+        params = _params_without_blanks(params)
         return await call(
             "GET",
             PATH_TRANSACTIONS,
@@ -566,5 +758,435 @@ def build_tools(client: AurumClient) -> ToolBundle:
     )
     async def delete_transaction(transaction_id: int) -> str:
         return await call("DELETE", f"{PATH_TRANSACTIONS}/{transaction_id}")
+
+    # --- Budgets ---
+
+    @registry.add(
+        "List the user's budgets — one monthly spending limit per "
+        "expense category (id, category_id, category_name, "
+        "monthly_limit)."
+    )
+    async def list_budgets() -> str:
+        return await call(
+            "GET",
+            PATH_BUDGETS,
+            compact=lambda items: [_compact_budget(item) for item in items],
+        )
+
+    @registry.add(
+        "Budgets vs. actual spend for one month — THE call for 'how "
+        "much is left in the X budget'. year (2000-2100) and month "
+        "(1-12) default to the current month. Each item: budget_id, "
+        "category_id, category_name, monthly_limit, spent (includes "
+        "the category's subcategories), remaining, percent (may "
+        "exceed 100), is_over_budget. budget_id and category_id are "
+        "the handles for a later update_budget or delete_budget."
+    )
+    async def get_budget_status(year: int | None = None, month: int | None = None) -> str:
+        params = _omit_none(year=year, month=month)
+        return await call(
+            "GET",
+            f"{PATH_BUDGETS}/status",
+            params=params or None,
+            compact=lambda payload: {
+                "year": payload.get("year"),
+                "month": payload.get("month"),
+                "items": [_compact_budget_status_item(item) for item in payload.get("items", [])],
+            },
+        )
+
+    @registry.add(
+        "Create a monthly spending limit for ONE expense category. "
+        "Income categories cannot be budgeted, and each category has "
+        "at most one budget — the API returns 400 when either rule is "
+        "broken. Resolve the category id with list_categories first. "
+        "monthly_limit must be positive.",
+        is_write=True,
+    )
+    async def create_budget(category_id: int, monthly_limit: float) -> str:
+        return await call(
+            "POST",
+            PATH_BUDGETS,
+            body={"category_id": category_id, "monthly_limit": monthly_limit},
+            compact=_compact_budget,
+        )
+
+    @registry.add(
+        "Change a budget's monthly_limit (positive). The category "
+        "binding is fixed — to move a limit to another category, "
+        "delete and recreate the budget.",
+        is_write=True,
+    )
+    async def update_budget(budget_id: int, monthly_limit: float) -> str:
+        return await call(
+            "PATCH",
+            f"{PATH_BUDGETS}/{budget_id}",
+            body={"monthly_limit": monthly_limit},
+            compact=_compact_budget,
+        )
+
+    @registry.add(
+        "Delete a budget — only the limit goes; the category and its "
+        "transactions stay untouched.",
+        is_write=True,
+    )
+    async def delete_budget(budget_id: int) -> str:
+        return await call("DELETE", f"{PATH_BUDGETS}/{budget_id}")
+
+    # --- Goals ---
+
+    @registry.add(
+        "List savings goals with computed progress: id, name, "
+        "target_amount, target_date, current_amount, remaining, "
+        "percent, is_reached."
+    )
+    async def list_goals() -> str:
+        return await call("GET", PATH_GOALS)
+
+    @registry.add(
+        "Create a savings goal. name: 1-150 chars. target_amount: "
+        "positive. target_date: 'YYYY-MM-DD', or omit for an open-ended "
+        "goal. Progress starts at zero — money is attached later by "
+        "logging contributions.",
+        is_write=True,
+    )
+    async def create_goal(
+        name: str,
+        target_amount: float,
+        target_date: str | None = None,
+    ) -> str:
+        body = _omit_none(name=name, target_amount=target_amount, target_date=target_date)
+        return await call("POST", PATH_GOALS, body=body)
+
+    @registry.add(
+        "Update a goal partially — omitted fields stay as-is. "
+        "clear_target_date=true removes the deadline (sends "
+        "target_date=null) and wins if target_date is also given.",
+        is_write=True,
+    )
+    async def update_goal(
+        goal_id: int,
+        name: str | None = None,
+        target_amount: float | None = None,
+        target_date: str | None = None,
+        clear_target_date: bool = False,
+    ) -> str:
+        body = _omit_none(name=name, target_amount=target_amount, target_date=target_date)
+        # Same explicit-null pattern as update_category's clear_parent:
+        # "not provided" keeps the date, an explicit null clears it.
+        if clear_target_date:
+            body["target_date"] = None
+        return await call("PATCH", f"{PATH_GOALS}/{goal_id}", body=body)
+
+    @registry.add(
+        "Log money moved into (positive amount) or out of (negative "
+        "amount) a goal. The ONLY way to change a goal's progress: "
+        "current_amount is always the sum of every logged "
+        "contribution, there is no 'set balance' call. Zero is "
+        "rejected. date: 'YYYY-MM-DD'. note: optional, up to 200 "
+        "chars.",
+        is_write=True,
+    )
+    async def add_goal_contribution(
+        goal_id: int,
+        amount: float,
+        date: str,
+        note: str | None = None,
+    ) -> str:
+        body = _omit_none(amount=amount, date=date, note=note)
+        return await call("POST", f"{PATH_GOALS}/{goal_id}/contributions", body=body)
+
+    @registry.add(
+        "PERMANENTLY delete a goal AND its whole contribution log — "
+        "the money history goes with it, and there is no softer "
+        "archive-like option for goals.",
+        is_write=True,
+    )
+    async def delete_goal(goal_id: int) -> str:
+        return await call("DELETE", f"{PATH_GOALS}/{goal_id}")
+
+    # --- Analytics & reports (read-only) ---
+
+    @registry.add(
+        "One month's headline numbers: real_income, spent, net, "
+        "transferred_out, plus spending broken down by category "
+        "(category_id, name, amount, percent, children when a slice's "
+        "spend came from more than one distinct category — subcategory "
+        "rollup). year (2000-2100) and month "
+        "(1-12) default to the current month. THE call for 'how did "
+        "this month go' summaries."
+    )
+    async def get_dashboard_summary(year: int | None = None, month: int | None = None) -> str:
+        params = _omit_none(year=year, month=month)
+        return await call(
+            "GET",
+            PATH_DASHBOARD,
+            params=params or None,
+            compact=_compact_dashboard_summary,
+        )
+
+    @registry.add(
+        "Income vs. expense month by month: points (year, month, "
+        "income, expense, net) plus total_income/total_expense/"
+        "total_net. start_date/end_date ('YYYY-MM-DD', inclusive) "
+        "bound the series; omit both for all history. THE call for "
+        "trend questions like 'is my income covering my spending'."
+    )
+    async def get_cash_flow(
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> str:
+        params = _params_without_blanks(_omit_none(start_date=start_date, end_date=end_date))
+        return await call("GET", PATH_CASH_FLOW, params=params or None)
+
+    @registry.add(
+        "One category's spend over time: total_amount, "
+        "transaction_count, average_per_month, month-by-month series "
+        "(year, month, amount). category_id is required — resolve it "
+        "with list_categories. start_date/end_date ('YYYY-MM-DD', "
+        "inclusive) bound the series; omit both for all history."
+    )
+    async def get_category_spending(
+        category_id: int,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> str:
+        params = _params_without_blanks(
+            _omit_none(category_id=category_id, start_date=start_date, end_date=end_date)
+        )
+        return await call(
+            "GET",
+            PATH_CATEGORY_SPENDING,
+            params=params,
+            compact=_compact_category_spending,
+        )
+
+    @registry.add(
+        "All categories ranked by total spend over a period, richest "
+        "first: items (category_id, name, amount, percent, "
+        "transaction_count, children when spend came from "
+        "subcategories) plus the period's total_amount. kind: "
+        "'expense' or 'income'. start_date/end_date ('YYYY-MM-DD', "
+        "inclusive) bound the period; omit both for all history. THE "
+        "call for 'where does my money go' questions."
+    )
+    async def get_category_ranking(
+        kind: str = "expense",
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> str:
+        params = _params_without_blanks(
+            _omit_none(kind=kind, start_date=start_date, end_date=end_date)
+        )
+        return await call(
+            "GET",
+            PATH_CATEGORY_RANKING,
+            params=params,
+            compact=_compact_category_ranking,
+        )
+
+    @registry.add(
+        "All tags ranked by total spend over a period: items (tag_id, "
+        "name, amount, percent of the period's TOTAL spending, "
+        "transaction_count, per-category breakdown), plus total_amount "
+        "and tagged_amount. kind: 'expense' or 'income'. "
+        "start_date/end_date ('YYYY-MM-DD', inclusive) bound the "
+        "period; omit both for all history. A single tag's trend over "
+        "time is get_tag_spending instead."
+    )
+    async def get_tag_ranking(
+        kind: str = "expense",
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> str:
+        params = _params_without_blanks(
+            _omit_none(kind=kind, start_date=start_date, end_date=end_date)
+        )
+        return await call(
+            "GET",
+            PATH_TAG_RANKING,
+            params=params,
+            compact=_compact_tag_ranking,
+        )
+
+    @registry.add(
+        "One tag's spend over time: total_amount, transaction_count, "
+        "average_per_month, month-by-month series (year, month, "
+        "amount). tag_id is required — resolve it with list_tags. "
+        "kind: 'expense' or 'income'. start_date/end_date "
+        "('YYYY-MM-DD', inclusive) bound the series; omit both for "
+        "all history."
+    )
+    async def get_tag_spending(
+        tag_id: int,
+        kind: str = "expense",
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> str:
+        params = _params_without_blanks(
+            _omit_none(tag_id=tag_id, kind=kind, start_date=start_date, end_date=end_date)
+        )
+        return await call(
+            "GET",
+            PATH_TAG_SPENDING,
+            params=params,
+            compact=_compact_tag_spending,
+        )
+
+    @registry.add(
+        "Active financial alerts: negative cash flow streak, declining "
+        "net worth, over-budget category, risky allocation, idle cash. "
+        "Each item is {key, severity, params} with NO ready-made "
+        "sentence — interpret the key and params yourself and build a "
+        "short message in the user's language (e.g. key 'idle_cash' "
+        "with params {count: 2, days: 75} means at least 2 accounts "
+        "have seen no activity for 75 days or more)."
+    )
+    async def get_insights() -> str:
+        return await call("GET", PATH_INSIGHTS)
+
+    @registry.add(
+        "Financial observations: rising spending categories, "
+        "unbudgeted top expenses, savings-rate trend. Each item is "
+        "{key, tone, params} with NO ready-made sentence — interpret "
+        "the key and params yourself and build a short message in the "
+        "user's language (e.g. key 'rising_category' with params "
+        "{category: 'Dining', percent: 34, current: 850.0, average: "
+        "635.0} means this month's Dining spend is 34% above its "
+        "usual average)."
+    )
+    async def get_advice() -> str:
+        return await call("GET", PATH_ADVICE)
+
+    # --- Recurring transactions ---
+
+    @registry.add(
+        "List recurring templates (bills/income that repeat on a "
+        "schedule), each with computed due-date info: next_due_date, "
+        "is_due, days_until_due (negative if overdue), is_active, "
+        "plus denormalized account/category names. Nothing posts "
+        "automatically in the background — posting is an explicit "
+        "post_recurring call."
+    )
+    async def list_recurring() -> str:
+        return await call(
+            "GET",
+            PATH_RECURRING,
+            compact=lambda items: [_compact_recurring(item) for item in items],
+        )
+
+    @registry.add(
+        "Create a recurring template for a bill or income that "
+        "repeats on a schedule. type: 'income', 'expense' or "
+        "'transfer', following the same consistency rules as "
+        "create_transaction: income/expense take an optional "
+        "category_id of the matching kind and must NOT set "
+        "transfer_account_id; transfer requires transfer_account_id "
+        "(different from account_id) and must NOT set category_id. "
+        "NOTE: unlike transactions, the API does NOT reject a "
+        "template that breaks these rules — a broken template would "
+        "post broken transactions, so follow the rules exactly. "
+        "amount is positive, description 1-255 chars. frequency: "
+        "'weekly' | 'monthly' | 'yearly'. anchor_date ('YYYY-MM-DD') "
+        "is the first due date. No date and no tag_ids — the posting "
+        "transaction is dated at post time.",
+        is_write=True,
+    )
+    async def create_recurring(
+        account_id: int,
+        type: str,
+        amount: float,
+        description: str,
+        frequency: str,
+        anchor_date: str,
+        category_id: int | None = None,
+        transfer_account_id: int | None = None,
+        merchant: str | None = None,
+        notes: str | None = None,
+    ) -> str:
+        body = _omit_none(
+            account_id=account_id,
+            type=type,
+            amount=amount,
+            description=description,
+            frequency=frequency,
+            anchor_date=anchor_date,
+            category_id=category_id,
+            transfer_account_id=transfer_account_id,
+            merchant=merchant,
+            notes=notes,
+        )
+        return await call("POST", PATH_RECURRING, body=body, compact=_compact_recurring)
+
+    @registry.add(
+        "Update a recurring template partially — omitted fields stay "
+        "as-is. is_active=false pauses the template without deleting "
+        "anything; is_active=true resumes it. Follow the "
+        "type-consistency rules of create_recurring when changing "
+        "type, account, category or transfer fields — the API does "
+        "not reject an inconsistent template, so keeping the row "
+        "consistent is on you.",
+        is_write=True,
+    )
+    async def update_recurring(
+        recurring_id: int,
+        account_id: int | None = None,
+        type: str | None = None,
+        amount: float | None = None,
+        description: str | None = None,
+        frequency: str | None = None,
+        anchor_date: str | None = None,
+        category_id: int | None = None,
+        transfer_account_id: int | None = None,
+        merchant: str | None = None,
+        notes: str | None = None,
+        is_active: bool | None = None,
+    ) -> str:
+        body = _omit_none(
+            account_id=account_id,
+            type=type,
+            amount=amount,
+            description=description,
+            frequency=frequency,
+            anchor_date=anchor_date,
+            category_id=category_id,
+            transfer_account_id=transfer_account_id,
+            merchant=merchant,
+            notes=notes,
+            is_active=is_active,
+        )
+        return await call(
+            "PATCH",
+            f"{PATH_RECURRING}/{recurring_id}",
+            body=body,
+            compact=_compact_recurring,
+        )
+
+    @registry.add(
+        "Delete a recurring template. Already-posted transactions stay "
+        "untouched — only the future schedule goes away. Prefer "
+        "update_recurring with is_active=false when the bill might "
+        "come back.",
+        is_write=True,
+    )
+    async def delete_recurring(recurring_id: int) -> str:
+        return await call("DELETE", f"{PATH_RECURRING}/{recurring_id}")
+
+    @registry.add(
+        "Post a recurring template NOW: creates a real transaction "
+        "dated today with the template's fields and advances the "
+        "schedule (last_posted_date moves to today, next_due_date is "
+        "recomputed). The response describes the TEMPLATE's new "
+        "state, not the created transaction. A confirmation preview "
+        "may warn about a similar transaction already recorded today "
+        "— the user decides whether to still post.",
+        is_write=True,
+    )
+    async def post_recurring(recurring_id: int) -> str:
+        return await call(
+            "POST",
+            f"{PATH_RECURRING}/{recurring_id}/post",
+            compact=_compact_recurring,
+        )
 
     return registry.bundle()

@@ -61,6 +61,7 @@ def make_graph(client: Any, model: ScriptedModel) -> Any:
         system_prompt=SYSTEM_PROMPT,
         duplicate_checker=_no_duplicates,
         name_resolver=_no_names,
+        recurring_duplicate_checker=_no_duplicates,
         checkpointer=InMemorySaver(),
     )
 
@@ -99,6 +100,14 @@ def test_describe_call_labels_known_actions() -> None:
     assert line.startswith("Создать транзакцию: account_id=1")
     # The most destructive call keeps its cascade warning in the label.
     assert "вместе со ВСЕМИ" in describe_call("delete_account", {"account_id": 3})
+    # Goal deletion destroys the contribution log too — the label must say so.
+    assert "журналом взносов" in describe_call("delete_goal", {"goal_id": 2})
+    # A withdrawal is still a contribution call; the label warns about the sign.
+    assert "списание" in describe_call("add_goal_contribution", {"goal_id": 2, "amount": -50.0})
+    assert describe_call("create_budget", {"category_id": 4}).startswith("Создать бюджет")
+    # Posting writes a real transaction today — the label says so.
+    assert "транзакцию" in describe_call("post_recurring", {"recurring_id": 2})
+    assert describe_call("delete_recurring", {"recurring_id": 2}).startswith("Удалить")
 
 
 def test_describe_call_passes_unknown_names_through() -> None:

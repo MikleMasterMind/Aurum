@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { RefreshCw, Send } from "lucide-react";
 import { ApiError } from "@/api/client";
 import { confirmChatCalls, resetChatThread, sendChatMessage } from "@/api/chat";
+import { ChatMarkdown } from "@/components/assistant/ChatMarkdown";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
@@ -374,14 +375,22 @@ export function AssistantPage() {
           <div
             key={index}
             className={cn(
-              "max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm",
+              "max-w-[85%] rounded-2xl px-4 py-2.5 text-sm",
               message.role === "user"
                 ? "ml-auto bg-surface-2 text-text-primary"
                 : "mr-auto border bg-surface-1 text-text-primary",
               message.isError && "border-danger/40"
             )}
           >
-            {message.text}
+            {/* The assistant speaks markdown, so its replies render
+                through ChatMarkdown; user text and localized error
+                strings are not markdown and stay as typed — hence the
+                whitespace-pre-wrap, which a markdown block would fight. */}
+            {message.role === "assistant" && !message.isError ? (
+              <ChatMarkdown text={message.text} />
+            ) : (
+              <span className="whitespace-pre-wrap">{message.text}</span>
+            )}
           </div>
         ))}
 

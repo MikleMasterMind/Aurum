@@ -7,10 +7,10 @@ themselves know nothing about confirmations — that is the graph's job
 (see graph.py): any name in ``ToolBundle.write_names`` is routed through
 a terminal "yes" before its REST call is allowed to run.
 
-Scope notes: transaction splits are deliberately not exposed in this
-MVP, and neither is ``DELETE /tags/{id}`` — tags are only created and
-listed here, because the block-1 agent helps tag transactions, not
-manage the tag dictionary itself.
+Scope notes: transaction splits are deliberately not exposed, and
+neither is ``DELETE /tags/{id}`` — tags are only created and listed
+here, because the agent helps tag transactions, not manage the tag
+dictionary itself.
 """
 
 from __future__ import annotations
@@ -366,9 +366,10 @@ def _tool(func: Callable[..., Awaitable[str]], description: str) -> BaseTool:
 class _Registry:
     """Tool registration with an explicit read/write class per tool.
 
-    Every tool is declared through ``@registry.add(..., is_write=...)`` —
-    reads carry the explicit default too — so the confirmation split is
-    visible at each definition instead of being implied by an absent
+    Every tool is declared through ``@registry.add(...)`` — writes
+    with ``is_write=True``, reads keeping the decorator's explicit
+    ``is_write=False`` default — so the confirmation split is visible
+    at each definition instead of being implied by an absent
     ``writes.add`` line somewhere above it.
     """
 

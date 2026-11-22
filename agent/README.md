@@ -2,9 +2,10 @@
 
 A terminal AI assistant for a running [Aurum](../README.md) instance. It talks
 to the instance's REST API (see [DOCS.md](../DOCS.md)) the same way any other
-HTTP client does — no direct database access, no extra backend. The scope of
-this MVP is **block 1: finance management** — transactions, accounts,
-categories and tags: create, edit, search.
+HTTP client does — no direct database access, no extra backend. The scope is
+**blocks 1–2: finance management, planning and analytics** — transactions,
+accounts, categories, tags, budgets, goals and recurring templates: create,
+edit, search — plus read-only reports, cash flow and insights.
 
 ```
 $ aurum-agent
@@ -21,18 +22,24 @@ $ aurum-agent
 
 ## How it works
 
-- **LangChain tools** wrap the REST endpoints — 15 of them: accounts
+- **LangChain tools** wrap the REST endpoints — 38 of them: accounts
   (list/create/update/delete), categories (list/create/update/delete),
-  tags (list/create), transactions (get/search/create/update/delete).
+  tags (list/create), transactions (get/search/create/update/delete),
+  budgets (list/status/create/update/delete), goals
+  (list/create/update/delete/contribute), recurring templates
+  (list/create/update/delete/post), and eight read-only analytics
+  calls (dashboard, cash flow, four report rankings/spend series,
+  insights, advice).
 - **LangGraph** drives the dialogue. Every tool that mutates data is routed
   through a terminal confirmation (`interrupt`/`resume`) — the model cannot
   execute a write without an explicit `y` from you. Declined operations come
   back to the model as a refusal, with an instruction not to retry on its own.
 - **Idempotency.** The API has no idempotency keys, so the agent guards
   itself: writes are never auto-retried (a timed-out POST is not re-sent),
-  and before creating a transaction the agent checks for an existing one
-  with the same date, amount and description — a match shows up as a
-  "possible duplicate" warning in the confirmation preview.
+  and before creating a transaction — or posting a recurring template,
+  which writes a transaction dated today — the agent checks for an
+  existing one with the same date, amount and description; a match shows
+  up as a "possible duplicate" warning in the confirmation preview.
 - **Memory.** The agent remembers the whole session: your messages, its own
   answers and every tool result. `/reset` starts a clean thread. Memory lives
   in the process (in-memory checkpointer) — a fresh `aurum-agent` run starts
@@ -101,14 +108,14 @@ and costs cents per session of terminal use.
 cd agent && .venv/bin/python -m pytest
 ```
 
-The suite (128 tests) runs without a running instance, an LLM, or network
+The suite (202 tests) runs without a running instance, an LLM, or network
 access: the API is a recording `MockTransport`, the model is a scripted test
 double that replays queued answers through the real graph.
 
 ## Not in this MVP (on purpose)
 
 - Transaction splits across categories (single-category rows only).
-- Budgets, goals, assets, crypto, recurring — later blocks.
+- Assets, crypto and net worth — later blocks.
 - `DELETE /tags/{id}` — the agent creates and lists tags, it does not manage
   the tag dictionary.
 - Cross-restart memory persistence (SQLite checkpointer) and streaming

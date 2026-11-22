@@ -24,7 +24,7 @@ from rich.console import Console
 
 from .api_client import SETTINGS_PATH, AurumApiError, AurumClient
 from .config import ConfigError, load_config
-from .dedup import find_duplicates
+from .dedup import find_duplicates, find_duplicates_for_recurring
 from .graph import build_agent_graph
 from .prompts import build_system_prompt
 from .repl import ReadLine, repl_loop
@@ -91,9 +91,12 @@ async def run() -> int:
                 today=date.today().isoformat(),
                 currency=currency,
             ),
-            # The duplicate check rides the same client and inherits
-            # its "degrade, never block" failure behavior.
+            # The duplicate checks ride the same client and inherit
+            # its "degrade, never block" failure behavior — one backs
+            # create_transaction, the other the transaction a
+            # post_recurring call would write today.
             duplicate_checker=partial(find_duplicates, client),
+            recurring_duplicate_checker=partial(find_duplicates_for_recurring, client),
             # Required for interrupt(): the confirm gate cannot freeze
             # and resume without a checkpointer backing the state.
             checkpointer=InMemorySaver(),

@@ -41,3 +41,13 @@ def test_prompt_pins_analytics_rules() -> None:
     assert "get_dashboard_summary" in prompt
     assert "instead of paging through" in prompt
     assert "key+params" in prompt
+
+
+def test_prompt_pins_recurring_rules() -> None:
+    prompt = build_system_prompt(today="2026-11-21", currency="USD")
+
+    # No background scheduler exists; posting is explicit and writes
+    # a real transaction today; pausing is is_active=false.
+    assert "no scheduler" in prompt
+    assert "dated today" in prompt
+    assert "is_active=false" in prompt

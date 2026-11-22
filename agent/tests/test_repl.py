@@ -56,6 +56,7 @@ def make_graph(client: Any, model: ScriptedModel) -> Any:
         build_tools(client),
         system_prompt=SYSTEM_PROMPT,
         duplicate_checker=_no_duplicates,
+        recurring_duplicate_checker=_no_duplicates,
         checkpointer=InMemorySaver(),
     )
 
@@ -99,6 +100,9 @@ def test_describe_call_labels_known_actions() -> None:
     # A withdrawal is still a contribution call; the label warns about the sign.
     assert "списание" in describe_call("add_goal_contribution", {"goal_id": 2, "amount": -50.0})
     assert describe_call("create_budget", {"category_id": 4}).startswith("Создать бюджет")
+    # Posting writes a real transaction today — the label says so.
+    assert "транзакцию" in describe_call("post_recurring", {"recurring_id": 2})
+    assert describe_call("delete_recurring", {"recurring_id": 2}).startswith("Удалить")
 
 
 def test_describe_call_passes_unknown_names_through() -> None:

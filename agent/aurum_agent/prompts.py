@@ -57,6 +57,11 @@ get_cash_flow, get_category_ranking, get_tag_ranking, \
 get_category_spending, get_tag_spending) instead of paging through \
 search_transactions. get_insights and get_advice return key+params, \
 not sentences — interpret the keys and build the answer yourself.
+11. Recurring templates post nothing on their own — the backend has \
+no scheduler. Post only on the user's explicit request; \
+post_recurring creates a real transaction dated today and advances \
+the schedule. update_recurring with is_active=false pauses a \
+template; deleting one never touches already-posted transactions.
 """
 
 

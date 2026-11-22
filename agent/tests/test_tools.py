@@ -29,6 +29,10 @@ EXPECTED_WRITE_NAMES = {
     "update_goal",
     "delete_goal",
     "add_goal_contribution",
+    "create_recurring",
+    "update_recurring",
+    "delete_recurring",
+    "post_recurring",
 }
 
 
@@ -280,6 +284,36 @@ def advice_payload() -> dict[str, Any]:
             }
         ]
     }
+
+
+def recurring_payload() -> list[dict[str, Any]]:
+    # Extra UI fields on purpose: compaction must drop them and keep
+    # the computed schedule fields instead.
+    return [
+        {
+            "id": 2,
+            "account_id": 1,
+            "account_name": "Checking",
+            "category_id": 4,
+            "category_name": "Groceries",
+            "category_color": "#22c55e",
+            "category_icon": "shopping-cart",
+            "transfer_account_id": None,
+            "transfer_account_name": None,
+            "type": "expense",
+            "amount": "15.99",
+            "description": "Netflix",
+            "merchant": None,
+            "notes": None,
+            "frequency": "monthly",
+            "anchor_date": "2026-01-05",
+            "last_posted_date": "2026-11-05",
+            "is_active": True,
+            "next_due_date": "2026-12-05",
+            "is_due": False,
+            "days_until_due": 14,
+        }
+    ]
 
 
 async def test_write_names_registry_is_exact(
@@ -1116,6 +1150,128 @@ async def test_advice_passes_items_through(mock_client_factory: Any) -> None:
     assert json.loads(result) == advice_payload()
 
 
+async def test_list_recurring_compacts_to_model_fields(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(lambda request: httpx.Response(200, json=recurring_payload()))
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["list_recurring"].ainvoke({})
+
+    assert str(calls[0].url) == "http://test.local/api/recurring"
+    # color/icon dropped; the computed schedule fields stay.
+    assert json.loads(result) == [
+        {
+            "id": 2,
+            "account_id": 1,
+            "account_name": "Checking",
+            "category_id": 4,
+            "category_name": "Groceries",
+            "transfer_account_id": None,
+            "transfer_account_name": None,
+            "type": "expense",
+            "amount": "15.99",
+            "description": "Netflix",
+            "merchant": None,
+            "notes": None,
+            "frequency": "monthly",
+            "anchor_date": "2026-01-05",
+            "last_posted_date": "2026-11-05",
+            "is_active": True,
+            "next_due_date": "2026-12-05",
+            "is_due": False,
+            "days_until_due": 14,
+        }
+    ]
+
+
+async def test_create_recurring_body_and_compacted_answer(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(
+        lambda request: httpx.Response(201, json=recurring_payload()[0])
+    )
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["create_recurring"].ainvoke(
+        {
+            "account_id": 1,
+            "type": "expense",
+            "amount": 15.99,
+            "description": "Netflix",
+            "frequency": "monthly",
+            "anchor_date": "2026-01-05",
+            "category_id": 4,
+        }
+    )
+
+    assert calls[0].method == "POST"
+    assert str(calls[0].url) == "http://test.local/api/recurring"
+    assert body_of(calls[0]) == {
+        "account_id": 1,
+        "type": "expense",
+        "amount": 15.99,
+        "description": "Netflix",
+        "frequency": "monthly",
+        "anchor_date": "2026-01-05",
+        "category_id": 4,
+    }
+    assert json.loads(result)["next_due_date"] == "2026-12-05"
+
+
+async def test_update_recurring_keeps_false_is_active(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(
+        lambda request: httpx.Response(200, json=recurring_payload()[0])
+    )
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["update_recurring"].ainvoke(
+        {"recurring_id": 2, "is_active": False}
+    )
+
+    assert calls[0].method == "PATCH"
+    assert str(calls[0].url) == "http://test.local/api/recurring/2"
+    # False is a real value (a pause), not "leave unchanged" — it
+    # must travel, unlike None.
+    assert body_of(calls[0]) == {"is_active": False}
+    # The mock's canned answer, untouched by the patch body above.
+    assert json.loads(result)["is_active"] is True
+
+
+async def test_update_recurring_without_fields_makes_no_call(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(lambda request: httpx.Response(200, json={}))
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["update_recurring"].ainvoke({"recurring_id": 2})
+
+    assert calls == []
+    assert "Nothing to update" in result
+
+
+async def test_delete_recurring_path_and_204(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(lambda request: httpx.Response(204))
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["delete_recurring"].ainvoke({"recurring_id": 2})
+
+    assert calls[0].method == "DELETE"
+    assert str(calls[0].url) == "http://test.local/api/recurring/2"
+    assert "204" in result
+
+
+async def test_post_recurring_path_returns_advanced_template(mock_client_factory: Any) -> None:
+    client, calls = mock_client_factory(
+        lambda request: httpx.Response(201, json=recurring_payload()[0])
+    )
+    bundle = build_tools(client)
+
+    result = await bundle_by_name(bundle)["post_recurring"].ainvoke({"recurring_id": 2})
+
+    # The /post endpoint answers with the TEMPLATE's new state, so
+    # the compacted result talks schedule, not the new transaction.
+    assert calls[0].method == "POST"
+    assert calls[0].url.path == "/api/recurring/2/post"
+    parsed = json.loads(result)
+    assert parsed["last_posted_date"] == "2026-11-05"
+    assert parsed["next_due_date"] == "2026-12-05"
+
+
 @pytest.mark.parametrize(
     ("tool_name", "is_write"),
     [
@@ -1152,6 +1308,11 @@ async def test_advice_passes_items_through(mock_client_factory: Any) -> None:
         ("get_tag_spending", False),
         ("get_insights", False),
         ("get_advice", False),
+        ("list_recurring", False),
+        ("create_recurring", True),
+        ("update_recurring", True),
+        ("delete_recurring", True),
+        ("post_recurring", True),
     ],
 )
 async def test_every_tool_is_classified(

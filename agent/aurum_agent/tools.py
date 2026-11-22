@@ -1,4 +1,4 @@
-"""LangChain tools over the Aurum REST API: accounts, categories, tags, transactions, budgets, goals, analytics.
+"""LangChain tools over the Aurum REST API: accounts, categories, tags, transactions, budgets, goals, recurring, analytics.
 
 Each tool is a thin, typed wrapper around one endpoint: it compacts the
 response into model-friendly JSON, or turns an ``AurumApiError`` into a
@@ -32,6 +32,7 @@ PATH_TAGS = "/tags"
 PATH_TRANSACTIONS = "/transactions"
 PATH_BUDGETS = "/budgets"
 PATH_GOALS = "/goals"
+PATH_RECURRING = "/recurring"
 # Read-only aggregations behind the UI's charts.
 PATH_DASHBOARD = "/dashboard/summary"
 PATH_CASH_FLOW = "/cash-flow"
@@ -316,6 +317,37 @@ def _compact_tag_spending(payload: dict[str, Any]) -> dict[str, Any]:
         "transaction_count": payload.get("transaction_count"),
         "average_per_month": payload.get("average_per_month"),
         "series": payload.get("series", []),
+    }
+
+
+def _compact_recurring(payload: dict[str, Any]) -> dict[str, Any]:
+    """Fields the model needs to discuss a recurring template.
+
+    The computed schedule fields (next_due_date, is_due,
+    days_until_due) are the point of the listing; color/icon are
+    UI-only. Denormalized names ride along so the model can speak
+    human language without extra lookups.
+    """
+    return {
+        "id": payload.get("id"),
+        "account_id": payload.get("account_id"),
+        "account_name": payload.get("account_name"),
+        "category_id": payload.get("category_id"),
+        "category_name": payload.get("category_name"),
+        "transfer_account_id": payload.get("transfer_account_id"),
+        "transfer_account_name": payload.get("transfer_account_name"),
+        "type": payload.get("type"),
+        "amount": payload.get("amount"),
+        "description": payload.get("description"),
+        "merchant": payload.get("merchant"),
+        "notes": payload.get("notes"),
+        "frequency": payload.get("frequency"),
+        "anchor_date": payload.get("anchor_date"),
+        "last_posted_date": payload.get("last_posted_date"),
+        "is_active": payload.get("is_active"),
+        "next_due_date": payload.get("next_due_date"),
+        "is_due": payload.get("is_due"),
+        "days_until_due": payload.get("days_until_due"),
     }
 
 
@@ -1024,5 +1056,136 @@ def build_tools(client: AurumClient) -> ToolBundle:
     )
     async def get_advice() -> str:
         return await call("GET", PATH_ADVICE)
+
+    # --- Recurring transactions ---
+
+    @registry.add(
+        "List recurring templates (bills/income that repeat on a "
+        "schedule), each with computed due-date info: next_due_date, "
+        "is_due, days_until_due (negative if overdue), is_active, "
+        "plus denormalized account/category names. Nothing posts "
+        "automatically in the background — posting is an explicit "
+        "post_recurring call."
+    )
+    async def list_recurring() -> str:
+        return await call(
+            "GET",
+            PATH_RECURRING,
+            compact=lambda items: [_compact_recurring(item) for item in items],
+        )
+
+    @registry.add(
+        "Create a recurring template for a bill or income that "
+        "repeats on a schedule. type: 'income', 'expense' or "
+        "'transfer', following the same consistency rules as "
+        "create_transaction: income/expense take an optional "
+        "category_id of the matching kind and must NOT set "
+        "transfer_account_id; transfer requires transfer_account_id "
+        "(different from account_id) and must NOT set category_id. "
+        "NOTE: unlike transactions, the API does NOT reject a "
+        "template that breaks these rules — a broken template would "
+        "post broken transactions, so follow the rules exactly. "
+        "amount is positive, description 1-255 chars. frequency: "
+        "'weekly' | 'monthly' | 'yearly'. anchor_date ('YYYY-MM-DD') "
+        "is the first due date. No date and no tag_ids — the posting "
+        "transaction is dated at post time.",
+        is_write=True,
+    )
+    async def create_recurring(
+        account_id: int,
+        type: str,
+        amount: float,
+        description: str,
+        frequency: str,
+        anchor_date: str,
+        category_id: int | None = None,
+        transfer_account_id: int | None = None,
+        merchant: str | None = None,
+        notes: str | None = None,
+    ) -> str:
+        body = _omit_none(
+            account_id=account_id,
+            type=type,
+            amount=amount,
+            description=description,
+            frequency=frequency,
+            anchor_date=anchor_date,
+            category_id=category_id,
+            transfer_account_id=transfer_account_id,
+            merchant=merchant,
+            notes=notes,
+        )
+        return await call("POST", PATH_RECURRING, body=body, compact=_compact_recurring)
+
+    @registry.add(
+        "Update a recurring template partially — omitted fields stay "
+        "as-is. is_active=false pauses the template without deleting "
+        "anything; is_active=true resumes it. Follow the "
+        "type-consistency rules of create_recurring when changing "
+        "type, account, category or transfer fields — the API does "
+        "not reject an inconsistent template, so keeping the row "
+        "consistent is on you.",
+        is_write=True,
+    )
+    async def update_recurring(
+        recurring_id: int,
+        account_id: int | None = None,
+        type: str | None = None,
+        amount: float | None = None,
+        description: str | None = None,
+        frequency: str | None = None,
+        anchor_date: str | None = None,
+        category_id: int | None = None,
+        transfer_account_id: int | None = None,
+        merchant: str | None = None,
+        notes: str | None = None,
+        is_active: bool | None = None,
+    ) -> str:
+        body = _omit_none(
+            account_id=account_id,
+            type=type,
+            amount=amount,
+            description=description,
+            frequency=frequency,
+            anchor_date=anchor_date,
+            category_id=category_id,
+            transfer_account_id=transfer_account_id,
+            merchant=merchant,
+            notes=notes,
+            is_active=is_active,
+        )
+        return await call(
+            "PATCH",
+            f"{PATH_RECURRING}/{recurring_id}",
+            body=body,
+            compact=_compact_recurring,
+        )
+
+    @registry.add(
+        "Delete a recurring template. Already-posted transactions stay "
+        "untouched — only the future schedule goes away. Prefer "
+        "update_recurring with is_active=false when the bill might "
+        "come back.",
+        is_write=True,
+    )
+    async def delete_recurring(recurring_id: int) -> str:
+        return await call("DELETE", f"{PATH_RECURRING}/{recurring_id}")
+
+    @registry.add(
+        "Post a recurring template NOW: creates a real transaction "
+        "dated today with the template's fields and advances the "
+        "schedule (last_posted_date moves to today, next_due_date is "
+        "recomputed). The response describes the TEMPLATE's new "
+        "state, not the created transaction. A confirmation preview "
+        "may warn about a similar transaction already recorded today "
+        "— the user decides whether to still post.",
+        is_write=True,
+    )
+    async def post_recurring(recurring_id: int) -> str:
+        return await call(
+            "POST",
+            f"{PATH_RECURRING}/{recurring_id}/post",
+            compact=_compact_recurring,
+        )
 
     return registry.bundle()

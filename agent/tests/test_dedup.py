@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from typing import Any
 
 import httpx
 
-from aurum_agent.dedup import DUPLICATE_PAGE_SIZE, find_duplicates
+from aurum_agent.dedup import (
+    DUPLICATE_PAGE_SIZE,
+    find_duplicates,
+    find_duplicates_for_recurring,
+)
 
 
 def backend_row(row_id: int, amount: str, description: str) -> dict[str, Any]:
@@ -172,3 +177,83 @@ async def test_row_with_unparseable_amount_is_skipped_not_fatal(
     )
 
     assert [row["id"] for row in duplicates] == [7]
+
+
+def netflix_template() -> dict[str, Any]:
+    """A RecurringTransactionRead-shaped row the list endpoint could return."""
+    return {
+        "id": 2,
+        "account_id": 1,
+        "account_name": "Checking",
+        "category_id": 4,
+        "category_name": "Groceries",
+        "category_color": "#22c55e",
+        "category_icon": "shopping-cart",
+        "transfer_account_id": None,
+        "transfer_account_name": None,
+        "type": "expense",
+        "amount": "15.99",
+        "description": "Netflix",
+        "merchant": None,
+        "notes": None,
+        "frequency": "monthly",
+        "anchor_date": "2026-01-05",
+        "last_posted_date": None,
+        "is_active": True,
+        "next_due_date": "2026-12-05",
+        "is_due": False,
+        "days_until_due": 14,
+    }
+
+
+def recurring_list(*templates: dict[str, Any]) -> httpx.Response:
+    return httpx.Response(200, json=list(templates))
+
+
+async def test_recurring_post_finds_today_duplicate(mock_client_factory: Any) -> None:
+    # Posting writes a transaction dated today — the template's
+    # amount/description are matched against today's rows.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/recurring":
+            return recurring_list(netflix_template())
+        return page_of(backend_row(7, "15.99", "Netflix"))
+
+    client, calls = mock_client_factory(handler)
+
+    duplicates = await find_duplicates_for_recurring(client, recurring_id=2)
+
+    assert [row["id"] for row in duplicates] == [7]
+    # The transaction search is scoped to today, the post date.
+    search = calls[1]
+    assert dict(search.url.params)["start_date"] == date.today().isoformat()
+    assert dict(search.url.params)["end_date"] == date.today().isoformat()
+
+
+async def test_recurring_unknown_id_makes_no_search(mock_client_factory: Any) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return recurring_list(netflix_template())  # id 2 only
+
+    client, calls = mock_client_factory(handler)
+
+    assert await find_duplicates_for_recurring(client, recurring_id=99) == []
+    # One request total (the template list) — no doomed search.
+    assert len(calls) == 1
+
+
+async def test_recurring_list_error_degrades_to_no_matches(mock_client_factory: Any) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"detail": "boom"})
+
+    client, _ = mock_client_factory(handler)
+
+    assert await find_duplicates_for_recurring(client, recurring_id=2) == []
+
+
+async def test_recurring_garbage_id_degrades_to_no_matches(mock_client_factory: Any) -> None:
+    # A raw model-issued id (None, a string) matches nothing.
+    client, calls = mock_client_factory(lambda request: recurring_list(netflix_template()))
+
+    assert await find_duplicates_for_recurring(client, recurring_id=None) == []
+    assert await find_duplicates_for_recurring(client, recurring_id="2") == []
+    # Each attempt still fetched the list before finding no match.
+    assert len(calls) == 2

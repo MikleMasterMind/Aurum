@@ -7,14 +7,18 @@ terminal, the graph asks this module whether a "same" transaction
 already exists: same date, same amount, same description
 (case-insensitive). The check is advisory only — it never blocks a
 creation, it just puts any match in front of the user's "yes".
+The same check backs ``post_recurring``: posting writes a transaction
+dated today with the template's fields, so the template is looked up
+and matched against today's existing rows.
 """
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from .api_client import AurumApiError, AurumClient
-from .tools import PATH_TRANSACTIONS
+from .tools import PATH_RECURRING, PATH_TRANSACTIONS
 
 # Same-date, same-description matches rarely exceed a page; the point
 # is to catch accidental doubles, not to audit history.
@@ -108,3 +112,48 @@ async def find_duplicates(
             continue
         duplicates.append(_compact_duplicate(item))
     return duplicates
+
+
+async def find_duplicates_for_recurring(
+    client: AurumClient,
+    *,
+    recurring_id: Any,
+) -> list[dict[str, Any]]:
+    """Duplicates for the transaction a recurring post would create.
+
+    ``POST /recurring/{id}/post`` writes a real transaction dated
+    today with the template's amount and description — so before the
+    terminal confirms it, the same date/amount/description check
+    runs against today. The template is fetched via the list endpoint
+    (the API has no single-template GET). Advisory and total, like
+    find_duplicates: a missing template, a transport failure or an
+    odd body all degrade to "no matches" — a failing check must
+    never block the user's confirmation.
+    """
+    # A raw model-issued id (None, a string) simply matches nothing.
+    try:
+        templates = await client.request("GET", PATH_RECURRING)
+    except AurumApiError:
+        return []
+
+    if not isinstance(templates, list):
+        return []
+    template = next(
+        (
+            item
+            for item in templates
+            if isinstance(item, dict) and item.get("id") == recurring_id
+        ),
+        None,
+    )
+    if template is None:
+        return []
+
+    # The post endpoint dates the new transaction "today" server-side;
+    # the agent runs on the user's own machine, so local today is it.
+    return await find_duplicates(
+        client,
+        date=date.today().isoformat(),
+        amount=template.get("amount"),
+        description=template.get("description"),
+    )

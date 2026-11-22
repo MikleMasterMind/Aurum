@@ -28,7 +28,9 @@ ReadLine = Callable[[], Awaitable[str]]
 
 # Human-readable action labels for the confirmation previews. The
 # delete_account and delete_goal labels repeat the cascade warning on
-# purpose: they destroy other data along with their targets.
+# purpose: they destroy other data along with their targets. The
+# post_recurring label names what the call will create — the same
+# honest preview rule, for the opposite direction.
 ACTION_LABELS = {
     "create_transaction": "Создать транзакцию",
     "update_transaction": "Изменить транзакцию",
@@ -47,6 +49,10 @@ ACTION_LABELS = {
     "update_goal": "Изменить цель",
     "delete_goal": "Удалить цель — вместе с журналом взносов",
     "add_goal_contribution": "Записать взнос в цель (отрицательная сумма — списание)",
+    "create_recurring": "Создать регулярный платёж",
+    "update_recurring": "Изменить регулярный платёж",
+    "delete_recurring": "Удалить регулярный платёж",
+    "post_recurring": "Провести регулярный платёж — создаст транзакцию за сегодня",
 }
 
 

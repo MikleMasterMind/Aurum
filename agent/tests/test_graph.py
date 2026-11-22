@@ -36,13 +36,19 @@ def tool_call(call_id: str, name: str, args: dict[str, Any]) -> AIMessage:
     )
 
 
-def make_graph(client: httpx.AsyncClient, model: ScriptedModel, dup: Any = None) -> Any:
+def make_graph(
+    client: httpx.AsyncClient,
+    model: ScriptedModel,
+    dup: Any = None,
+    recurring_dup: Any = None,
+) -> Any:
     bundle = build_tools(client)
     return build_agent_graph(
         model,
         bundle,
         system_prompt=SYSTEM_PROMPT,
         duplicate_checker=dup or _no_duplicates,
+        recurring_duplicate_checker=recurring_dup or _no_duplicates,
         checkpointer=InMemorySaver(),
     )
 
@@ -499,3 +505,90 @@ async def test_router_analytics_reads_pass_through(
     result = await graph.ainvoke({"messages": [HumanMessage("сколько потратил")]}, CONFIG)
 
     assert "__interrupt__" not in result
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "expected"),
+    [
+        ("list_recurring", "tools"),
+        ("create_recurring", "confirm"),
+        ("update_recurring", "confirm"),
+        ("delete_recurring", "confirm"),
+        ("post_recurring", "confirm"),
+    ],
+)
+async def test_router_split_recurring(
+    mock_client_factory: Any, tool_name: str, expected: str
+) -> None:
+    # Recurring follows the earlier blocks' gate placement: listing
+    # is a read, everything else — posting included, it writes a
+    # real transaction — freezes at the interrupt.
+    args_by_name: dict[str, dict[str, Any]] = {
+        "list_recurring": {},
+        "create_recurring": {
+            "account_id": 1,
+            "type": "expense",
+            "amount": 15.99,
+            "description": "Netflix",
+            "frequency": "monthly",
+            "anchor_date": "2026-01-05",
+            "category_id": 4,
+        },
+        "update_recurring": {"recurring_id": 2, "is_active": False},
+        "delete_recurring": {"recurring_id": 2},
+        "post_recurring": {"recurring_id": 2},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Only the read-only case ever executes; a list body works.
+        return httpx.Response(200, json=[])
+
+    client, _ = mock_client_factory(handler)
+    model = ScriptedModel()
+    model.queue(tool_call("c1", tool_name, args_by_name[tool_name]))
+    model.queue(AIMessage(content="…"))
+    graph = make_graph(client, model)
+
+    result = await graph.ainvoke({"messages": [HumanMessage("действие")]}, CONFIG)
+
+    assert ("__interrupt__" in result) is (expected == "confirm")
+    if "__interrupt__" in result:
+        pending = result["__interrupt__"][0].value[PENDING_KEY]
+        assert pending[0]["name"] == tool_name
+        assert pending[0]["args"] == args_by_name[tool_name]
+
+
+async def test_post_recurring_preview_carries_duplicates(mock_client_factory: Any) -> None:
+    # The recurring checker feeds the same "possible duplicate"
+    # warning the create_transaction preview shows.
+    async def recurring_dup(**kwargs: Any) -> list[dict[str, Any]]:
+        assert kwargs["recurring_id"] == 2
+        return [{"id": 7, "amount": "15.99", "description": "Netflix", "date": "2026-11-21"}]
+
+    client, _ = mock_client_factory(lambda request: httpx.Response(200, json=[]))
+    model = ScriptedModel()
+    model.queue(tool_call("c1", "post_recurring", {"recurring_id": 2}))
+    model.queue(AIMessage(content="…"))
+    graph = make_graph(client, model, recurring_dup=recurring_dup)
+
+    result = await graph.ainvoke({"messages": [HumanMessage("проведи нетфликс")]}, CONFIG)
+
+    pending = result["__interrupt__"][0].value[PENDING_KEY]
+    assert pending[0]["duplicates"][0]["id"] == 7
+
+
+async def test_declined_post_recurring_is_a_refusal(mock_client_factory: Any) -> None:
+    # A declined post must not reach the API — the refusal travels
+    # back to the model instead of a created transaction.
+    client, calls = mock_client_factory(lambda request: httpx.Response(201, json={"id": 9}))
+    model = ScriptedModel()
+    model.queue(tool_call("c1", "post_recurring", {"recurring_id": 2}))
+    model.queue(AIMessage(content="Не провёл"))
+    graph = make_graph(client, model)
+
+    await graph.ainvoke({"messages": [HumanMessage("проведи нетфликс")]}, CONFIG)
+    result = await graph.ainvoke(Command(resume=[False]), CONFIG)
+
+    assert calls == []  # the REST call never happened
+    tool_messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
+    assert tool_messages[0].content == DECLINED_TOOL_RESULT
